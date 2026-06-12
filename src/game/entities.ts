@@ -1,0 +1,220 @@
+import { playerConfig, racketConfig, shuttleConfig, worldConfig } from './config';
+import { clamp, sideDirection } from './math';
+import type { AiMemory, ShuttleState, Side, SwingType, Vec2 } from './types';
+
+export class Player {
+  readonly side: Side;
+  x: number;
+  y = worldConfig.groundY;
+  vx = 0;
+  vy = 0;
+  facing: number;
+  grounded = true;
+  coyoteTimer = 0;
+  jumpBufferTimer = 0;
+  swingType: SwingType | null = null;
+  swingTimer = 0;
+  swingHasHit = false;
+  ai: AiMemory;
+
+  constructor(side: Side) {
+    this.side = side;
+    this.x = side === 'left' ? 320 : 1280;
+    this.facing = sideDirection(side);
+    this.ai = {
+      serveTimer: 0,
+      decisionTimer: 0,
+      targetX: this.homeX,
+      aimForward: 1,
+      aimVertical: -1,
+      wantsPower: false,
+    };
+  }
+
+  get homeX(): number {
+    return this.side === 'left' ? 370 : 1230;
+  }
+
+  get minX(): number {
+    return this.side === 'left'
+      ? worldConfig.sidePadding
+      : worldConfig.netX + playerConfig.radius + 14;
+  }
+
+  get maxX(): number {
+    return this.side === 'left'
+      ? worldConfig.netX - playerConfig.radius - 14
+      : worldConfig.width - worldConfig.sidePadding;
+  }
+
+  get isSwinging(): boolean {
+    return this.swingType !== null;
+  }
+
+  get swingDuration(): number {
+    if (this.swingType === 'power') {
+      return (
+        racketConfig.powerWindup +
+        racketConfig.powerActive +
+        racketConfig.powerRecovery
+      );
+    }
+
+    return (
+      racketConfig.normalWindup +
+      racketConfig.normalActive +
+      racketConfig.normalRecovery
+    );
+  }
+
+  get swingPhase(): 'idle' | 'windup' | 'active' | 'recovery' {
+    if (!this.swingType) {
+      return 'idle';
+    }
+
+    const windup =
+      this.swingType === 'power'
+        ? racketConfig.powerWindup
+        : racketConfig.normalWindup;
+    const active =
+      this.swingType === 'power'
+        ? racketConfig.powerActive
+        : racketConfig.normalActive;
+
+    if (this.swingTimer < windup) {
+      return 'windup';
+    }
+
+    if (this.swingTimer < windup + active) {
+      return 'active';
+    }
+
+    return 'recovery';
+  }
+
+  get activeProgress(): number {
+    if (!this.swingType) {
+      return 0;
+    }
+
+    const windup =
+      this.swingType === 'power'
+        ? racketConfig.powerWindup
+        : racketConfig.normalWindup;
+    const active =
+      this.swingType === 'power'
+        ? racketConfig.powerActive
+        : racketConfig.normalActive;
+
+    return clamp((this.swingTimer - windup) / active, 0, 1);
+  }
+
+  startSwing(type: SwingType): void {
+    if (this.isSwinging) {
+      return;
+    }
+
+    this.swingType = type;
+    this.swingTimer = 0;
+    this.swingHasHit = false;
+  }
+
+  updateSwing(dt: number): void {
+    if (!this.swingType) {
+      return;
+    }
+
+    this.swingTimer += dt;
+
+    if (this.swingTimer >= this.swingDuration) {
+      this.swingType = null;
+      this.swingTimer = 0;
+      this.swingHasHit = false;
+    }
+  }
+
+  getRacketLine(): { start: Vec2; end: Vec2 } {
+    const hand = this.getHandPosition();
+    const angle = this.getRacketAngle();
+
+    return {
+      start: hand,
+      end: {
+        x: hand.x + Math.cos(angle) * racketConfig.length,
+        y: hand.y + Math.sin(angle) * racketConfig.length,
+      },
+    };
+  }
+
+  getHandPosition(): Vec2 {
+    return {
+      x: this.x + this.facing * 31,
+      y: this.y - 116,
+    };
+  }
+
+  private getRacketAngle(): number {
+    const direction = this.facing;
+
+    if (!this.swingType) {
+      return direction === 1 ? -0.92 : Math.PI + 0.92;
+    }
+
+    const progress =
+      this.swingPhase === 'active'
+        ? this.activeProgress
+        : clamp(this.swingTimer / this.swingDuration, 0, 1);
+
+    if (this.swingType === 'power') {
+      const start = direction === 1 ? -2.15 : -0.99;
+      const end = direction === 1 ? 0.63 : Math.PI - 0.63;
+      return start + (end - start) * progress;
+    }
+
+    const start = direction === 1 ? -1.82 : -1.32;
+    const end = direction === 1 ? 0.28 : Math.PI - 0.28;
+    return start + (end - start) * progress;
+  }
+}
+
+export class Shuttlecock {
+  x = 0;
+  y = 0;
+  vx = 0;
+  vy = 0;
+  state: ShuttleState = 'attached';
+  lastTouchedBy: Side = 'left';
+  attachedTo: Side = 'left';
+  netCooldown = 0;
+
+  get position(): Vec2 {
+    return { x: this.x, y: this.y };
+  }
+
+  attachTo(player: Player): void {
+    this.state = 'attached';
+    this.attachedTo = player.side;
+    this.lastTouchedBy = player.side;
+    this.x = player.x + sideDirection(player.side) * 74;
+    this.y = player.y - 124;
+    this.vx = 0;
+    this.vy = 0;
+  }
+
+  updateAttached(player: Player): void {
+    this.x = player.x + sideDirection(player.side) * 74;
+    this.y = player.y - 124 + Math.sin(performance.now() / 210) * 2;
+  }
+
+  clampSpeed(): void {
+    const speed = Math.hypot(this.vx, this.vy);
+
+    if (speed <= shuttleConfig.maxSpeed) {
+      return;
+    }
+
+    const scale = shuttleConfig.maxSpeed / speed;
+    this.vx *= scale;
+    this.vy *= scale;
+  }
+}
