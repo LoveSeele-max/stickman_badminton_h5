@@ -11,35 +11,35 @@ export const worldConfig = {
 export const playerConfig = {
   height: 170,
   radius: 38,
-  maxSpeed: 450,
-  acceleration: 3100,
-  groundFriction: 20,
-  airControl: 0.46,
-  jumpSpeed: 745,
+  maxSpeed: 420,
+  acceleration: 2050,
+  groundFriction: 7.2,
+  airControl: 0.72,
+  jumpSpeed: 725,
   gravity: 1950,
   coyoteTime: 0.08,
   jumpBuffer: 0.14,
 };
 
 export const racketConfig = {
-  length: 126,
-  hitRadius: 58,
-  windup: 0,
-  active: 0.23,
-  recovery: 0.1,
-  hitBuffer: 0.16,
-  assistForwardMin: -28,
-  assistForwardMax: 244,
-  assistHeightMin: 34,
-  assistHeightMax: 318,
+  length: 120,
+  hitRadius: 39,
+  windup: 0.035,
+  active: 0.16,
+  recovery: 0.16,
+  hitBuffer: 0.03,
+  assistForwardMin: 8,
+  assistForwardMax: 154,
+  assistHeightMin: 54,
+  assistHeightMax: 242,
 };
 
 export const shuttleConfig = {
   radius: 15,
-  gravity: 1040,
-  linearDrag: 0.18,
-  quadraticDrag: 0.00031,
-  maxSpeed: 1800,
+  gravity: 1180,
+  linearDrag: 0.42,
+  quadraticDrag: 0.0005,
+  maxSpeed: 1680,
 };
 
 export const matchConfig = {
@@ -48,7 +48,7 @@ export const matchConfig = {
 };
 
 export const aiConfig = {
-  reactionInterval: 0.065,
-  targetError: 12,
-  serveDelay: 0.52,
+  reactionInterval: 0.2,
+  targetError: 72,
+  serveDelay: 0.95,
 };

@@ -26,15 +26,16 @@ repository.
 
 At the main menu, press `1` for single player or `2` for local versus.
 
-Hit feel uses simple key combinations:
+Hit feel uses one clear swing per hit press. Simple key combinations shape the
+shot:
 
 - `S`: stable return.
 - `D + S`: faster, flatter forward hit.
 - `A + S`: higher defensive lift.
 - `W + S`: jump hit, with stronger downward shots when the shuttle is high.
 
-Combo direction is locked when `S` is pressed, so you can release the movement
-key naturally while the buffered hit is still waiting for the shuttle.
+Combo direction is sampled when `S` is pressed, so you can release movement keys
+naturally during the swing without changing the intended shot.
 
 ## Development
 

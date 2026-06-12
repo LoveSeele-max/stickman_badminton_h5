@@ -170,8 +170,6 @@ export class BadmintonGame {
       return;
     }
 
-    this.tryHeldHitAssist(this.players.left, leftIntent);
-    this.tryHeldHitAssist(this.players.right, rightIntent);
     this.updateShuttle(dt);
     this.resolveRacketHits(leftIntent, rightIntent);
     this.resolveNetCollision();
@@ -320,15 +318,20 @@ export class BadmintonGame {
       player.vx = 0;
     }
 
-    if (intent.hitPressed) {
-      player.hitBufferTimer = racketConfig.hitBuffer;
+    if (intent.hitPressed && !player.isSwinging) {
       this.captureHitIntent(player, intent);
-    } else {
-      player.hitBufferTimer = Math.max(0, player.hitBufferTimer - dt);
+      player.startSwing();
     }
 
+    player.hitBufferTimer = Math.max(0, player.hitBufferTimer - dt);
     player.hitIntentTimer = Math.max(0, player.hitIntentTimer - dt);
+    const wasSwinging = player.isSwinging;
+    const swingHadHit = player.swingHasHit;
     player.updateSwing(dt);
+
+    if (wasSwinging && !player.isSwinging && !swingHadHit) {
+      this.showSwingMiss(player);
+    }
   }
 
   private launchServe(player: Player): void {
@@ -402,7 +405,7 @@ export class BadmintonGame {
       : 1 - clamp(hitDistance / threshold, 0, 1);
     const faceSweetness = 1 - clamp(Math.abs(contact.t - 0.74) / 0.42, 0, 1);
     const quality = clamp(
-      0.34 + center * 0.28 + timing * 0.22 + faceSweetness * 0.24,
+      0.42 + center * 0.3 + timing * 0.2 + faceSweetness * 0.14,
       0,
       1,
     );
@@ -428,7 +431,7 @@ export class BadmintonGame {
     this.impactX = this.shuttle.x;
     this.impactY = this.shuttle.y;
     this.impactPower = contact.powerScale;
-    this.impactTimer = shot === 'smash' ? 0.18 : 0.13;
+    this.impactTimer = shot === 'smash' ? 0.22 : 0.16;
   }
 
   private getHitContact(
@@ -439,7 +442,7 @@ export class BadmintonGame {
     const edgeAmount = 1 - clamp(projection.distance / threshold, 0, 1);
     let zone: FaceZone;
 
-    if (edgeAmount < 0.24 && !assist.inZone) {
+    if (edgeAmount < 0.22 && (!assist.inZone || assist.zoneQuality < 0.34)) {
       zone = 'edge';
     } else if (projection.t < 0.46) {
       zone = 'handle';
@@ -452,17 +455,17 @@ export class BadmintonGame {
     }
 
     const tuning = {
-      handle: { arcScale: 1.26, distanceScale: 0.76, label: 'Handle', powerScale: 0.78 },
-      center: { arcScale: 1.05, distanceScale: 0.98, label: 'Center', powerScale: 1 },
-      sweet: { arcScale: 0.9, distanceScale: 1.18, label: 'Sweet', powerScale: 1.24 },
-      tip: { arcScale: 0.78, distanceScale: 1.28, label: 'Tip', powerScale: 1.18 },
-      edge: { arcScale: 1.38, distanceScale: 0.66, label: 'Edge', powerScale: 0.64 },
+      handle: { arcScale: 1.12, distanceScale: 0.9, label: 'Handle', powerScale: 0.9 },
+      center: { arcScale: 1.02, distanceScale: 1, label: 'Center', powerScale: 1 },
+      sweet: { arcScale: 0.96, distanceScale: 1.08, label: 'Sweet', powerScale: 1.1 },
+      tip: { arcScale: 0.92, distanceScale: 1.1, label: 'Tip', powerScale: 1.08 },
+      edge: { arcScale: 1.16, distanceScale: 0.82, label: 'Edge', powerScale: 0.82 },
     } satisfies Record<
       FaceZone,
       { arcScale: number; distanceScale: number; label: string; powerScale: number }
     >;
     const selected = tuning[zone];
-    const assistBoost = assist.inZone ? lerp(0.92, 1.04, assist.zoneQuality) : 1;
+    const assistBoost = assist.inZone ? lerp(0.96, 1.02, assist.zoneQuality) : 1;
 
     return {
       ...selected,
@@ -473,30 +476,21 @@ export class BadmintonGame {
     };
   }
 
-  private tryHeldHitAssist(player: Player, intent: PlayerIntent): void {
-    if (
-      (!intent.hitHeld && player.hitBufferTimer <= 0) ||
-      player.isSwinging ||
-      this.shuttle.state !== 'flying'
-    ) {
-      return;
-    }
-
-    const assist = this.getHitAssist(player);
-
-    if (assist.inZone && sideDirection(player.side) * this.shuttle.vx < 260) {
-      if (player.hitIntentTimer <= 0) {
-        this.captureHitIntent(player, intent);
-      }
-
-      player.startSwing();
-    }
-  }
-
   private captureHitIntent(player: Player, intent: PlayerIntent): void {
     player.hitIntentMove = intent.move;
     player.hitIntentJump = intent.jump || !player.grounded;
-    player.hitIntentTimer = racketConfig.hitBuffer + player.swingDuration + 0.04;
+    player.hitIntentTimer = player.swingDuration + 0.04;
+  }
+
+  private showSwingMiss(player: Player): void {
+    const direction = sideDirection(player.side);
+    const hand = player.getHandPosition();
+    this.lastHitLabel = 'Miss';
+    this.lastHitTimer = 0.38;
+    this.impactX = hand.x + direction * 78;
+    this.impactY = hand.y - 12;
+    this.impactPower = 0.54;
+    this.impactTimer = 0.08;
   }
 
   private getHitIntent(
@@ -545,7 +539,7 @@ export class BadmintonGame {
   ): ShotKind {
     const netTop = worldConfig.groundY - worldConfig.netHeight;
     const heightAboveGround = worldConfig.groundY - this.shuttle.y;
-    const nearNet = Math.abs(this.shuttle.x - worldConfig.netX) < 180;
+    const nearNet = Math.abs(this.shuttle.x - worldConfig.netX) < 150;
     const direction = sideDirection(player.side);
     const movingForward = direction * player.vx > 80 || direction * intent.move > 0;
     const movingBack = direction * intent.move < 0;
@@ -559,20 +553,23 @@ export class BadmintonGame {
       return 'smash';
     }
 
-    if (
-      contact.zone === 'handle' ||
-      movingBack ||
-      this.shuttle.y > netTop + 40 ||
-      heightAboveGround < 150
-    ) {
+    if (movingForward && contact.zone !== 'handle' && heightAboveGround > 120) {
+      return 'drive';
+    }
+
+    if (movingBack || contact.zone === 'handle' || heightAboveGround < 150) {
       return 'lift';
     }
 
-    if ((!movingForward || intent.jump) && heightAboveGround > 270 && contact.zone !== 'tip') {
+    if (nearNet && this.shuttle.y > netTop - 20) {
+      return 'drive';
+    }
+
+    if (heightAboveGround > 285 && contact.zone !== 'tip') {
       return 'clear';
     }
 
-    if (movingForward || nearNet || contact.zone === 'tip' || contact.zone === 'sweet') {
+    if (contact.zone === 'tip' || contact.zone === 'sweet') {
       return 'drive';
     }
 
@@ -596,38 +593,38 @@ export class BadmintonGame {
     const minTargetX = Math.min(nearNet, deepCourt);
     const maxTargetX = Math.max(nearNet, deepCourt);
     const targetByShot = {
-      clear: { x: deepCourt, y: worldConfig.groundY - 74, t: 1.28, lift: 1.18 },
+      clear: { x: deepCourt, y: worldConfig.groundY - 78, t: 1.42, lift: 1.16 },
       drive: {
         x: clamp(opponent.x + direction * 76, minTargetX, maxTargetX),
         y: worldConfig.groundY - 210,
-        t: 0.78,
-        lift: 1.04,
+        t: 0.9,
+        lift: 0.98,
       },
-      lift: { x: midCourt, y: worldConfig.groundY - 82, t: 1.22, lift: 1.24 },
+      lift: { x: midCourt, y: worldConfig.groundY - 86, t: 1.34, lift: 1.22 },
       smash: {
         x: clamp(opponent.x - direction * 64, Math.min(shortCourt, deepCourt), Math.max(shortCourt, deepCourt)),
-        y: worldConfig.groundY - 38,
-        t: 0.48,
-        lift: 0.9,
+        y: worldConfig.groundY - 42,
+        t: 0.54,
+        lift: 0.84,
       },
-      neutral: { x: midCourt, y: worldConfig.groundY - 145, t: 0.92, lift: 1.08 },
+      neutral: { x: midCourt, y: worldConfig.groundY - 150, t: 1.02, lift: 1.02 },
     } satisfies Record<ShotKind, { x: number; y: number; t: number; lift: number }>;
     const target = targetByShot[shot];
     const comboDistance =
-      forwardInput > 0 ? 1.16 : forwardInput < 0 ? 0.92 : 1 + Math.abs(player.vx) / 2400;
+      forwardInput > 0 ? 1.08 : forwardInput < 0 ? 0.94 : 1 + Math.abs(player.vx) / 3600;
     const comboArc =
-      intent.jump || !player.grounded ? 0.88 : forwardInput < 0 ? 1.18 : 1;
+      intent.jump || !player.grounded ? 0.92 : forwardInput < 0 ? 1.12 : 1;
     const comboPower =
       1 +
-      (forwardInput > 0 ? 0.22 : 0) +
-      (intent.jump || !player.grounded ? 0.16 : 0);
+      (forwardInput > 0 ? 0.14 : 0) +
+      (intent.jump || !player.grounded ? 0.08 : 0);
     const qualityTargetX = lerp(
       nearNet,
       target.x,
       clamp(
         (0.72 + quality * 0.28) * contact.distanceScale * comboDistance,
         0.42,
-        1.26,
+        1.18,
       ),
     );
     const t =
@@ -636,11 +633,11 @@ export class BadmintonGame {
     const dx = qualityTargetX - this.shuttle.x;
     const dy = target.y - this.shuttle.y;
     const dragCompensation =
-      (shot === 'smash' ? 1.14 : 1.22) * contact.powerScale * comboPower;
-    const approachBoost = Math.max(0, direction * player.vx) * 0.24;
+      (shot === 'smash' ? 1.2 : 1.34) * contact.powerScale * comboPower;
+    const approachBoost = Math.max(0, direction * player.vx) * 0.2;
     const edgeFlutter =
       contact.zone === 'edge'
-        ? Math.sin(this.rallyHits * 1.91 + contact.t * 6) * 90
+        ? Math.sin(this.rallyHits * 1.91 + contact.t * 6) * 42
         : 0;
 
     return {
@@ -888,7 +885,15 @@ export class BadmintonGame {
       player.swingPhase === 'active' ? '#ffffff' : 'rgba(15,23,42,0.9)';
     ctx.lineWidth = 5;
     ctx.beginPath();
-    ctx.ellipse(racket.end.x, racket.end.y, 28, 42, 0.2 * player.facing, 0, Math.PI * 2);
+    ctx.ellipse(
+      racket.end.x,
+      racket.end.y,
+      28,
+      42,
+      0.2 * player.facing,
+      0,
+      Math.PI * 2,
+    );
     ctx.stroke();
   }
 
@@ -920,7 +925,10 @@ export class BadmintonGame {
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(this.shuttle.x, this.shuttle.y);
-      ctx.lineTo(this.shuttle.x - this.shuttle.vx * 0.08, this.shuttle.y - this.shuttle.vy * 0.08);
+      ctx.lineTo(
+        this.shuttle.x - this.shuttle.vx * 0.08,
+        this.shuttle.y - this.shuttle.vy * 0.08,
+      );
       ctx.stroke();
     }
   }
@@ -958,7 +966,11 @@ export class BadmintonGame {
     ctx.fillRect(548, 24, 504, 92);
     ctx.fillStyle = '#ffffff';
     ctx.font = '700 54px Inter, sans-serif';
-    ctx.fillText(`${this.score.left}   ${this.score.right}`, worldConfig.width / 2, 64);
+    ctx.fillText(
+      `${this.score.left}   ${this.score.right}`,
+      worldConfig.width / 2,
+      64,
+    );
     ctx.font = '600 22px Inter, sans-serif';
     ctx.fillText(
       `${this.mode === 'single' ? 'Single' : 'Versus'} | Serve: ${this.server.toUpperCase()} | Rally: ${this.rallyHits}`,
@@ -980,12 +992,13 @@ export class BadmintonGame {
       return;
     }
 
-    const isAttached = this.shuttle.state === 'attached' && this.phase === 'playing';
+    const isAttached =
+      this.shuttle.state === 'attached' && this.phase === 'playing';
     const text = isAttached
       ? `${this.server.toUpperCase()} serve`
       : this.phase === 'matchEnd' && this.winner
         ? `${this.winner.toUpperCase()} wins`
-      : this.message;
+        : this.message;
     const hint =
       this.phase === 'paused'
         ? 'Enter/P to resume, R restart, M menu'
@@ -1063,13 +1076,25 @@ export class BadmintonGame {
       ctx.lineTo(racket.end.x, racket.end.y);
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(racket.end.x, racket.end.y, racketConfig.hitRadius, 0, Math.PI * 2);
+      ctx.arc(
+        racket.end.x,
+        racket.end.y,
+        racketConfig.hitRadius,
+        0,
+        Math.PI * 2,
+      );
       ctx.stroke();
     }
 
     ctx.strokeStyle = '#38f7ff';
     ctx.beginPath();
-    ctx.arc(this.shuttle.x, this.shuttle.y, shuttleConfig.radius, 0, Math.PI * 2);
+    ctx.arc(
+      this.shuttle.x,
+      this.shuttle.y,
+      shuttleConfig.radius,
+      0,
+      Math.PI * 2,
+    );
     ctx.stroke();
 
     ctx.fillStyle = 'rgba(15,23,42,0.72)';

@@ -30,16 +30,25 @@ export const createAiIntent = (
   if (player.ai.decisionTimer <= 0) {
     const prediction = predictTarget(player.side, shuttle);
     const pressure = opponent.side === 'left' ? opponent.x < 500 : opponent.x > 1100;
-    const racketOffset = sideDirection(player.side) * 104;
+    const direction = sideDirection(player.side);
+    const racketOffset = direction * 96;
+    const read = Math.sin(
+      shuttle.x * 0.027 +
+        shuttle.y * 0.019 +
+        shuttle.vx * 0.004 +
+        player.x * 0.013,
+    );
+    const misread = prediction.isThreat && read > 0.76;
+    const mistake = misread ? direction * 118 : 0;
 
     player.ai.targetX = clamp(
-      prediction.targetX - racketOffset + prediction.error,
+      prediction.targetX - racketOffset + prediction.error + mistake,
       player.minX,
       player.maxX,
     );
 
     if (pressure && prediction.isThreat) {
-      player.ai.targetX += sideDirection(player.side) * 18;
+      player.ai.targetX += direction * 12;
     }
 
     player.ai.decisionTimer = aiConfig.reactionInterval;
@@ -55,29 +64,37 @@ export const createAiIntent = (
   const forward = direction * (shuttle.x - player.x);
   const height = player.y - shuttle.y;
   const inHitZone =
-    forward >= racketConfig.assistForwardMin - 8 &&
-    forward <= racketConfig.assistForwardMax + 16 &&
+    forward >= racketConfig.assistForwardMin - 2 &&
+    forward <= racketConfig.assistForwardMax + 6 &&
     height >= racketConfig.assistHeightMin &&
-    height <= racketConfig.assistHeightMax + 10;
+    height <= racketConfig.assistHeightMax + 4;
   const ballOnOwnSide = isOnSide(shuttle.x, player.side);
-  const incoming = direction * shuttle.vx < 130 || ballOnOwnSide;
+  const incoming = direction * shuttle.vx < 70 || ballOnOwnSide;
   const shouldJump =
     ballOnOwnSide &&
     incoming &&
-    Math.abs(dx) < 130 &&
-    height > 215 &&
-    shuttle.vy > -720;
+    Math.abs(dx) < 118 &&
+    height > 230 &&
+    shuttle.vy > -650;
+  const timingRead = Math.sin(
+    shuttle.x * 0.019 +
+      shuttle.y * 0.023 +
+      shuttle.vx * 0.003 +
+      player.x * 0.011,
+  );
+  const mistimed = timingRead > 0.9 && height < 210;
   const shouldSwing =
     shuttle.state === 'flying' &&
     incoming &&
-    (distanceToRacket < 154 || inHitZone) &&
-    height > 24;
+    !mistimed &&
+    (distanceToRacket < 132 || inHitZone) &&
+    height > 34;
 
   return {
     move,
     jump: shouldJump,
     jumpPressed: shouldJump && player.grounded,
-    hitHeld: shouldSwing,
+    hitHeld: false,
     hitPressed: shouldSwing,
     pausePressed: emptyPause,
   };
