@@ -33,6 +33,9 @@ Hit feel uses simple key combinations:
 - `A + S`: higher defensive lift.
 - `W + S`: jump hit, with stronger downward shots when the shuttle is high.
 
+Combo direction is locked when `S` is pressed, so you can release the movement
+key naturally while the buffered hit is still waiting for the shuttle.
+
 ## Development
 
 ```bash

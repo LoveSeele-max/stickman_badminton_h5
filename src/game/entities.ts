@@ -16,6 +16,9 @@ export class Player {
   swingTimer = 0;
   swingHasHit = false;
   hitBufferTimer = 0;
+  hitIntentJump = false;
+  hitIntentMove = 0;
+  hitIntentTimer = 0;
   ai: AiMemory;
 
   constructor(side: Side) {

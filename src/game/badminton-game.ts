@@ -36,12 +36,18 @@ interface HitContact {
   zone: FaceZone;
 }
 
+interface HitIntentLock {
+  jump: boolean;
+  move: number;
+}
+
 const emptySnapshot: InputSnapshot = {
   down: new Set<string>(),
   pressed: new Set<string>(),
 };
 
 export class BadmintonGame {
+  private readonly consumedPressed = new Set<string>();
   private input = emptySnapshot;
   private phase: GamePhase = 'menu';
   private mode: MatchMode = 'single';
@@ -76,6 +82,7 @@ export class BadmintonGame {
 
   setInput(snapshot: InputSnapshot): void {
     this.input = snapshot;
+    this.consumedPressed.clear();
   }
 
   update(dt: number): void {
@@ -315,10 +322,12 @@ export class BadmintonGame {
 
     if (intent.hitPressed) {
       player.hitBufferTimer = racketConfig.hitBuffer;
+      this.captureHitIntent(player, intent);
     } else {
       player.hitBufferTimer = Math.max(0, player.hitBufferTimer - dt);
     }
 
+    player.hitIntentTimer = Math.max(0, player.hitIntentTimer - dt);
     player.updateSwing(dt);
   }
 
@@ -397,10 +406,13 @@ export class BadmintonGame {
       0,
       1,
     );
-    const shot = this.chooseShot(player, contact, intent);
-    const velocity = this.getShotVelocity(player, shot, quality, contact, intent);
+    const lockedIntent = this.getHitIntent(player, intent);
+    const shot = this.chooseShot(player, contact, lockedIntent);
+    const velocity = this.getShotVelocity(player, shot, quality, contact, lockedIntent);
 
     player.swingHasHit = true;
+    player.hitBufferTimer = 0;
+    player.hitIntentTimer = 0;
     this.shuttle.lastTouchedBy = player.side;
     this.shuttle.vx = velocity.x;
     this.shuttle.vy = velocity.y;
@@ -473,8 +485,35 @@ export class BadmintonGame {
     const assist = this.getHitAssist(player);
 
     if (assist.inZone && sideDirection(player.side) * this.shuttle.vx < 260) {
+      if (player.hitIntentTimer <= 0) {
+        this.captureHitIntent(player, intent);
+      }
+
       player.startSwing();
     }
+  }
+
+  private captureHitIntent(player: Player, intent: PlayerIntent): void {
+    player.hitIntentMove = intent.move;
+    player.hitIntentJump = intent.jump || !player.grounded;
+    player.hitIntentTimer = racketConfig.hitBuffer + player.swingDuration + 0.04;
+  }
+
+  private getHitIntent(
+    player: Player,
+    fallback: PlayerIntent,
+  ): HitIntentLock {
+    if (player.hitIntentTimer > 0) {
+      return {
+        jump: player.hitIntentJump,
+        move: player.hitIntentMove,
+      };
+    }
+
+    return {
+      jump: fallback.jump || !player.grounded,
+      move: fallback.move,
+    };
   }
 
   private getHitAssist(player: Player): { inZone: boolean; zoneQuality: number } {
@@ -502,7 +541,7 @@ export class BadmintonGame {
   private chooseShot(
     player: Player,
     contact: HitContact,
-    intent: PlayerIntent,
+    intent: HitIntentLock,
   ): ShotKind {
     const netTop = worldConfig.groundY - worldConfig.netHeight;
     const heightAboveGround = worldConfig.groundY - this.shuttle.y;
@@ -545,7 +584,7 @@ export class BadmintonGame {
     shot: ShotKind,
     quality: number,
     contact: HitContact,
-    intent: PlayerIntent,
+    intent: HitIntentLock,
   ): { x: number; y: number } {
     const direction = sideDirection(player.side);
     const forwardInput = direction * intent.move;
@@ -708,6 +747,10 @@ export class BadmintonGame {
       player.swingType = null;
       player.swingTimer = 0;
       player.swingHasHit = false;
+      player.hitBufferTimer = 0;
+      player.hitIntentJump = false;
+      player.hitIntentMove = 0;
+      player.hitIntentTimer = 0;
       player.ai.serveTimer = 0;
       player.ai.decisionTimer = 0;
       player.ai.targetX = player.homeX;
@@ -1045,7 +1088,12 @@ export class BadmintonGame {
   }
 
   private wasPressed(code: string): boolean {
-    return this.input.pressed.has(code);
+    if (this.consumedPressed.has(code) || !this.input.pressed.has(code)) {
+      return false;
+    }
+
+    this.consumedPressed.add(code);
+    return true;
   }
 }
 
