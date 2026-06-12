@@ -20,12 +20,24 @@ export const distancePointToSegment = (
   start: Vec2,
   end: Vec2,
 ): number => {
+  return projectPointToSegment(point, start, end).distance;
+};
+
+export const projectPointToSegment = (
+  point: Vec2,
+  start: Vec2,
+  end: Vec2,
+): { distance: number; point: Vec2; t: number } => {
   const segmentX = end.x - start.x;
   const segmentY = end.y - start.y;
   const lengthSquared = segmentX * segmentX + segmentY * segmentY;
 
   if (lengthSquared === 0) {
-    return distance(point, start);
+    return {
+      distance: distance(point, start),
+      point: start,
+      t: 0,
+    };
   }
 
   const t = clamp(
@@ -34,11 +46,16 @@ export const distancePointToSegment = (
     0,
     1,
   );
-
-  return distance(point, {
+  const projectedPoint = {
     x: start.x + segmentX * t,
     y: start.y + segmentY * t,
-  });
+  };
+
+  return {
+    distance: distance(point, projectedPoint),
+    point: projectedPoint,
+    t,
+  };
 };
 
 export const rectangleContainsCircle = (

@@ -9,8 +9,8 @@ import {
 import { Player, Shuttlecock } from './entities';
 import {
   clamp,
-  distancePointToSegment,
   lerp,
+  projectPointToSegment,
   rectangleContainsCircle,
   sideDirection,
 } from './math';
@@ -23,6 +23,18 @@ import type {
   Side,
   Viewport,
 } from './types';
+
+type FaceZone = 'handle' | 'center' | 'sweet' | 'tip' | 'edge';
+
+interface HitContact {
+  arcScale: number;
+  distanceScale: number;
+  label: string;
+  point: { x: number; y: number };
+  powerScale: number;
+  t: number;
+  zone: FaceZone;
+}
 
 const emptySnapshot: InputSnapshot = {
   down: new Set<string>(),
@@ -49,6 +61,7 @@ export class BadmintonGame {
   private lastHitTimer = 0;
   private impactX = 0;
   private impactY = 0;
+  private impactPower = 1;
   private impactTimer = 0;
 
   constructor(initialMode?: MatchMode) {
@@ -355,11 +368,12 @@ export class BadmintonGame {
     }
 
     const racket = player.getRacketLine();
-    const hitDistance = distancePointToSegment(
+    const projection = projectPointToSegment(
       this.shuttle.position,
       racket.start,
       racket.end,
     );
+    const hitDistance = projection.distance;
     const threshold = racketConfig.hitRadius + shuttleConfig.radius;
     const assist = this.getHitAssist(player);
 
@@ -367,30 +381,79 @@ export class BadmintonGame {
       return;
     }
 
+    const contact = this.getHitContact(projection, threshold, assist);
     const timing = 1 - Math.abs(player.activeProgress - 0.5) * 2;
     const center = assist.inZone
       ? Math.max(1 - clamp(hitDistance / threshold, 0, 1), assist.zoneQuality)
       : 1 - clamp(hitDistance / threshold, 0, 1);
-    const quality = clamp(0.46 + center * 0.36 + timing * 0.26, 0, 1);
-    const shot = this.chooseShot(player);
-    const velocity = this.getShotVelocity(player, shot, quality);
+    const faceSweetness = 1 - clamp(Math.abs(contact.t - 0.74) / 0.42, 0, 1);
+    const quality = clamp(
+      0.34 + center * 0.28 + timing * 0.22 + faceSweetness * 0.24,
+      0,
+      1,
+    );
+    const shot = this.chooseShot(player, contact);
+    const velocity = this.getShotVelocity(player, shot, quality, contact);
 
     player.swingHasHit = true;
     this.shuttle.lastTouchedBy = player.side;
     this.shuttle.vx = velocity.x;
     this.shuttle.vy = velocity.y;
-    this.shuttle.x = player.x + sideDirection(player.side) * 118;
+    this.shuttle.x = contact.point.x + sideDirection(player.side) * 18;
     this.shuttle.y = clamp(
-      this.shuttle.y,
+      contact.point.y,
       player.y - racketConfig.assistHeightMax,
       player.y - racketConfig.assistHeightMin,
     );
     this.rallyHits += 1;
-    this.lastHitLabel = `${quality > 0.86 ? 'Perfect' : quality > 0.52 ? 'Good' : 'Edge'} ${shot}`;
+    this.lastHitLabel = `${contact.label} ${shot}`;
     this.lastHitTimer = 0.72;
     this.impactX = this.shuttle.x;
     this.impactY = this.shuttle.y;
+    this.impactPower = contact.powerScale;
     this.impactTimer = shot === 'smash' ? 0.18 : 0.13;
+  }
+
+  private getHitContact(
+    projection: { distance: number; point: { x: number; y: number }; t: number },
+    threshold: number,
+    assist: { inZone: boolean; zoneQuality: number },
+  ): HitContact {
+    const edgeAmount = 1 - clamp(projection.distance / threshold, 0, 1);
+    let zone: FaceZone;
+
+    if (edgeAmount < 0.24 && !assist.inZone) {
+      zone = 'edge';
+    } else if (projection.t < 0.46) {
+      zone = 'handle';
+    } else if (projection.t < 0.66) {
+      zone = 'center';
+    } else if (projection.t < 0.88) {
+      zone = 'sweet';
+    } else {
+      zone = 'tip';
+    }
+
+    const tuning = {
+      handle: { arcScale: 1.26, distanceScale: 0.76, label: 'Handle', powerScale: 0.78 },
+      center: { arcScale: 1.05, distanceScale: 0.98, label: 'Center', powerScale: 1 },
+      sweet: { arcScale: 0.9, distanceScale: 1.18, label: 'Sweet', powerScale: 1.24 },
+      tip: { arcScale: 0.78, distanceScale: 1.28, label: 'Tip', powerScale: 1.18 },
+      edge: { arcScale: 1.38, distanceScale: 0.66, label: 'Edge', powerScale: 0.64 },
+    } satisfies Record<
+      FaceZone,
+      { arcScale: number; distanceScale: number; label: string; powerScale: number }
+    >;
+    const selected = tuning[zone];
+    const assistBoost = assist.inZone ? lerp(0.92, 1.04, assist.zoneQuality) : 1;
+
+    return {
+      ...selected,
+      distanceScale: selected.distanceScale * assistBoost,
+      point: projection.point,
+      t: projection.t,
+      zone,
+    };
   }
 
   private tryHeldHitAssist(player: Player, intent: PlayerIntent): void {
@@ -427,25 +490,30 @@ export class BadmintonGame {
     };
   }
 
-  private chooseShot(player: Player): ShotKind {
+  private chooseShot(player: Player, contact: HitContact): ShotKind {
     const netTop = worldConfig.groundY - worldConfig.netHeight;
     const heightAboveGround = worldConfig.groundY - this.shuttle.y;
     const nearNet = Math.abs(this.shuttle.x - worldConfig.netX) < 180;
     const movingForward = sideDirection(player.side) * player.vx > 90;
 
-    if (!player.grounded && this.shuttle.y < netTop - 10 && heightAboveGround > 230) {
+    if (
+      !player.grounded &&
+      contact.t > 0.62 &&
+      this.shuttle.y < netTop - 10 &&
+      heightAboveGround > 230
+    ) {
       return 'smash';
     }
 
-    if (this.shuttle.y > netTop + 40 || heightAboveGround < 150) {
+    if (contact.zone === 'handle' || this.shuttle.y > netTop + 40 || heightAboveGround < 150) {
       return 'lift';
     }
 
-    if (!movingForward && heightAboveGround > 270) {
+    if (!movingForward && heightAboveGround > 270 && contact.zone !== 'tip') {
       return 'clear';
     }
 
-    if (movingForward || nearNet) {
+    if (movingForward || nearNet || contact.zone === 'tip' || contact.zone === 'sweet') {
       return 'drive';
     }
 
@@ -456,6 +524,7 @@ export class BadmintonGame {
     player: Player,
     shot: ShotKind,
     quality: number,
+    contact: HitContact,
   ): { x: number; y: number } {
     const direction = sideDirection(player.side);
     const opponent = this.players[oppositeSide(player.side)];
@@ -483,18 +552,29 @@ export class BadmintonGame {
       neutral: { x: midCourt, y: worldConfig.groundY - 145, t: 0.92, lift: 1.08 },
     } satisfies Record<ShotKind, { x: number; y: number; t: number; lift: number }>;
     const target = targetByShot[shot];
-    const qualityTargetX = lerp(nearNet, target.x, 0.72 + quality * 0.28);
-    const t = target.t * (1.08 - quality * 0.1);
+    const qualityTargetX = lerp(
+      nearNet,
+      target.x,
+      clamp((0.72 + quality * 0.28) * contact.distanceScale, 0.42, 1.18),
+    );
+    const t = (target.t * (1.08 - quality * 0.1)) / Math.sqrt(contact.powerScale);
     const dx = qualityTargetX - this.shuttle.x;
     const dy = target.y - this.shuttle.y;
-    const dragCompensation = shot === 'smash' ? 1.08 : 1.16;
+    const dragCompensation = (shot === 'smash' ? 1.08 : 1.16) * contact.powerScale;
     const approachBoost = Math.max(0, direction * player.vx) * 0.16;
+    const edgeFlutter =
+      contact.zone === 'edge'
+        ? Math.sin(this.rallyHits * 1.91 + contact.t * 6) * 90
+        : 0;
 
     return {
       x: (dx / t) * dragCompensation + direction * approachBoost,
       y:
-        ((dy - 0.5 * shuttleConfig.gravity * t * t) / t) * target.lift +
-        player.vy * 0.045,
+        ((dy - 0.5 * shuttleConfig.gravity * t * t) / t) *
+          target.lift *
+          contact.arcScale +
+        player.vy * 0.045 +
+        edgeFlutter,
     };
   }
 
@@ -770,11 +850,12 @@ export class BadmintonGame {
     }
 
     const progress = this.impactTimer / 0.18;
-    const radius = 18 + (1 - progress) * 48;
+    const radius = 18 + (1 - progress) * 48 * this.impactPower;
+    const flash = this.impactPower > 1.08 ? '255,246,170' : '255,255,255';
     ctx.save();
     ctx.translate(this.impactX, this.impactY);
-    ctx.strokeStyle = `rgba(255,255,255,${0.78 * progress})`;
-    ctx.lineWidth = 5;
+    ctx.strokeStyle = `rgba(${flash},${0.84 * progress})`;
+    ctx.lineWidth = 4 + this.impactPower * 1.8;
 
     for (let i = 0; i < 8; i += 1) {
       const angle = (Math.PI * 2 * i) / 8;
