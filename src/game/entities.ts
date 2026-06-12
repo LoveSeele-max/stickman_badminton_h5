@@ -15,6 +15,7 @@ export class Player {
   swingType: SwingType | null = null;
   swingTimer = 0;
   swingHasHit = false;
+  hitBufferTimer = 0;
   ai: AiMemory;
 
   constructor(side: Side) {
@@ -88,8 +89,9 @@ export class Player {
     }
 
     this.swingType = 'hit';
-    this.swingTimer = 0;
+    this.swingTimer = racketConfig.windup === 0 ? 0.0001 : 0;
     this.swingHasHit = false;
+    this.hitBufferTimer = 0;
   }
 
   updateSwing(dt: number): void {

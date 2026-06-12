@@ -24,21 +24,22 @@ export const playerConfig = {
 export const racketConfig = {
   length: 126,
   hitRadius: 58,
-  windup: 0.025,
-  active: 0.2,
-  recovery: 0.12,
+  windup: 0,
+  active: 0.23,
+  recovery: 0.1,
+  hitBuffer: 0.16,
   assistForwardMin: -28,
-  assistForwardMax: 220,
+  assistForwardMax: 244,
   assistHeightMin: 34,
-  assistHeightMax: 292,
+  assistHeightMax: 318,
 };
 
 export const shuttleConfig = {
   radius: 15,
-  gravity: 1000,
-  linearDrag: 0.22,
-  quadraticDrag: 0.00038,
-  maxSpeed: 1450,
+  gravity: 1040,
+  linearDrag: 0.18,
+  quadraticDrag: 0.00031,
+  maxSpeed: 1800,
 };
 
 export const matchConfig = {

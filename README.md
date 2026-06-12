@@ -26,6 +26,13 @@ repository.
 
 At the main menu, press `1` for single player or `2` for local versus.
 
+Hit feel uses simple key combinations:
+
+- `S`: stable return.
+- `D + S`: faster, flatter forward hit.
+- `A + S`: higher defensive lift.
+- `W + S`: jump hit, with stronger downward shots when the shuttle is high.
+
 ## Development
 
 ```bash
