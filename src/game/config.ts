@@ -22,11 +22,15 @@ export const playerConfig = {
 };
 
 export const racketConfig = {
-  length: 118,
-  hitRadius: 48,
-  windup: 0.045,
-  active: 0.16,
-  recovery: 0.16,
+  length: 126,
+  hitRadius: 58,
+  windup: 0.025,
+  active: 0.2,
+  recovery: 0.12,
+  assistForwardMin: -28,
+  assistForwardMax: 220,
+  assistHeightMin: 34,
+  assistHeightMax: 292,
 };
 
 export const shuttleConfig = {
@@ -43,7 +47,7 @@ export const matchConfig = {
 };
 
 export const aiConfig = {
-  reactionInterval: 0.12,
-  targetError: 34,
-  serveDelay: 0.85,
+  reactionInterval: 0.065,
+  targetError: 12,
+  serveDelay: 0.52,
 };

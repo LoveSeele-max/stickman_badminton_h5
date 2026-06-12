@@ -1,4 +1,4 @@
-import { aiConfig, shuttleConfig, worldConfig } from './config';
+import { aiConfig, racketConfig, shuttleConfig, worldConfig } from './config';
 import { clamp, sideDirection } from './math';
 import type { Player, Shuttlecock } from './entities';
 import type { PlayerIntent, Side } from './types';
@@ -19,6 +19,7 @@ export const createAiIntent = (
       move: 0,
       jump: false,
       jumpPressed: false,
+      hitHeld: false,
       hitPressed: player.ai.serveTimer > aiConfig.serveDelay,
       pausePressed: emptyPause,
     };
@@ -29,9 +30,10 @@ export const createAiIntent = (
   if (player.ai.decisionTimer <= 0) {
     const prediction = predictTarget(player.side, shuttle);
     const pressure = opponent.side === 'left' ? opponent.x < 500 : opponent.x > 1100;
+    const racketOffset = sideDirection(player.side) * 104;
 
     player.ai.targetX = clamp(
-      prediction.targetX + prediction.error,
+      prediction.targetX - racketOffset + prediction.error,
       player.minX,
       player.maxX,
     );
@@ -49,24 +51,33 @@ export const createAiIntent = (
   const racketX = (racket.start.x + racket.end.x) / 2;
   const racketY = (racket.start.y + racket.end.y) / 2;
   const distanceToRacket = Math.hypot(shuttle.x - racketX, shuttle.y - racketY);
+  const direction = sideDirection(player.side);
+  const forward = direction * (shuttle.x - player.x);
+  const height = player.y - shuttle.y;
+  const inHitZone =
+    forward >= racketConfig.assistForwardMin - 8 &&
+    forward <= racketConfig.assistForwardMax + 16 &&
+    height >= racketConfig.assistHeightMin &&
+    height <= racketConfig.assistHeightMax + 10;
   const ballOnOwnSide = isOnSide(shuttle.x, player.side);
-  const incoming = sideDirection(player.side) * shuttle.vx < 80 || ballOnOwnSide;
+  const incoming = direction * shuttle.vx < 130 || ballOnOwnSide;
   const shouldJump =
     ballOnOwnSide &&
     incoming &&
-    Math.abs(dx) < 95 &&
-    shuttle.y < worldConfig.groundY - 205 &&
-    shuttle.vy > -620;
+    Math.abs(dx) < 130 &&
+    height > 215 &&
+    shuttle.vy > -720;
   const shouldSwing =
     shuttle.state === 'flying' &&
     incoming &&
-    distanceToRacket < 128 &&
-    shuttle.y < worldConfig.groundY - 32;
+    (distanceToRacket < 154 || inHitZone) &&
+    height > 24;
 
   return {
     move,
     jump: shouldJump,
     jumpPressed: shouldJump && player.grounded,
+    hitHeld: shouldSwing,
     hitPressed: shouldSwing,
     pausePressed: emptyPause,
   };
@@ -92,9 +103,9 @@ const predictTarget = (
   let bestX = side === 'left' ? 360 : 1240;
   let bestY = worldConfig.groundY;
   let sawOwnSide = false;
-  const step = 1 / 60;
+  const step = 1 / 90;
 
-  for (let i = 0; i < 210; i += 1) {
+  for (let i = 0; i < 330; i += 1) {
     const speed = Math.hypot(vx, vy);
     const drag =
       1 - Math.min(0.82, (shuttleConfig.linearDrag + shuttleConfig.quadraticDrag * speed) * step);

@@ -24,6 +24,7 @@ export interface PlayerIntent {
   move: number;
   jump: boolean;
   jumpPressed: boolean;
+  hitHeld: boolean;
   hitPressed: boolean;
   pausePressed: boolean;
 }

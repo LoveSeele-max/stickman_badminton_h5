@@ -10,6 +10,7 @@ import { Player, Shuttlecock } from './entities';
 import {
   clamp,
   distancePointToSegment,
+  lerp,
   rectangleContainsCircle,
   sideDirection,
 } from './math';
@@ -46,6 +47,9 @@ export class BadmintonGame {
   private message = 'Press 1 for Single Player or 2 for Local Versus';
   private lastHitLabel = '';
   private lastHitTimer = 0;
+  private impactX = 0;
+  private impactY = 0;
+  private impactTimer = 0;
 
   constructor(initialMode?: MatchMode) {
     this.resetMatch('single');
@@ -67,6 +71,7 @@ export class BadmintonGame {
     }
 
     this.lastHitTimer = Math.max(0, this.lastHitTimer - dt);
+    this.impactTimer = Math.max(0, this.impactTimer - dt);
 
     switch (this.phase) {
       case 'menu':
@@ -145,6 +150,8 @@ export class BadmintonGame {
       return;
     }
 
+    this.tryHeldHitAssist(this.players.left, leftIntent);
+    this.tryHeldHitAssist(this.players.right, rightIntent);
     this.updateShuttle(dt);
     this.resolveRacketHits();
     this.resolveNetCollision();
@@ -224,6 +231,7 @@ export class BadmintonGame {
       move: moveWorld,
       jump: this.isDown(keys.up),
       jumpPressed: this.wasPressed(keys.up),
+      hitHeld: this.isDown(keys.hit),
       hitPressed: this.wasPressed(keys.hit),
       pausePressed: this.wasPressed('Escape') || this.wasPressed('KeyP'),
     };
@@ -353,14 +361,17 @@ export class BadmintonGame {
       racket.end,
     );
     const threshold = racketConfig.hitRadius + shuttleConfig.radius;
+    const assist = this.getHitAssist(player);
 
-    if (hitDistance > threshold) {
+    if (hitDistance > threshold && !assist.inZone) {
       return;
     }
 
     const timing = 1 - Math.abs(player.activeProgress - 0.5) * 2;
-    const center = 1 - clamp(hitDistance / threshold, 0, 1);
-    const quality = clamp(0.38 + center * 0.42 + timing * 0.28, 0, 1);
+    const center = assist.inZone
+      ? Math.max(1 - clamp(hitDistance / threshold, 0, 1), assist.zoneQuality)
+      : 1 - clamp(hitDistance / threshold, 0, 1);
+    const quality = clamp(0.46 + center * 0.36 + timing * 0.26, 0, 1);
     const shot = this.chooseShot(player);
     const velocity = this.getShotVelocity(player, shot, quality);
 
@@ -368,11 +379,52 @@ export class BadmintonGame {
     this.shuttle.lastTouchedBy = player.side;
     this.shuttle.vx = velocity.x;
     this.shuttle.vy = velocity.y;
-    this.shuttle.x = racket.end.x + sideDirection(player.side) * 18;
-    this.shuttle.y += Math.sign(this.shuttle.y - racket.end.y) * 3;
+    this.shuttle.x = player.x + sideDirection(player.side) * 118;
+    this.shuttle.y = clamp(
+      this.shuttle.y,
+      player.y - racketConfig.assistHeightMax,
+      player.y - racketConfig.assistHeightMin,
+    );
     this.rallyHits += 1;
     this.lastHitLabel = `${quality > 0.86 ? 'Perfect' : quality > 0.52 ? 'Good' : 'Edge'} ${shot}`;
     this.lastHitTimer = 0.72;
+    this.impactX = this.shuttle.x;
+    this.impactY = this.shuttle.y;
+    this.impactTimer = shot === 'smash' ? 0.18 : 0.13;
+  }
+
+  private tryHeldHitAssist(player: Player, intent: PlayerIntent): void {
+    if (!intent.hitHeld || player.isSwinging || this.shuttle.state !== 'flying') {
+      return;
+    }
+
+    const assist = this.getHitAssist(player);
+
+    if (assist.inZone && sideDirection(player.side) * this.shuttle.vx < 260) {
+      player.startSwing();
+    }
+  }
+
+  private getHitAssist(player: Player): { inZone: boolean; zoneQuality: number } {
+    const direction = sideDirection(player.side);
+    const forward = direction * (this.shuttle.x - player.x);
+    const height = player.y - this.shuttle.y;
+    const xRange = racketConfig.assistForwardMax - racketConfig.assistForwardMin;
+    const yRange = racketConfig.assistHeightMax - racketConfig.assistHeightMin;
+    const xMid = (racketConfig.assistForwardMax + racketConfig.assistForwardMin) / 2;
+    const yMid = (racketConfig.assistHeightMax + racketConfig.assistHeightMin) / 2;
+    const normalizedX = Math.abs(forward - xMid) / (xRange / 2);
+    const normalizedY = Math.abs(height - yMid) / (yRange / 2);
+    const inZone =
+      forward >= racketConfig.assistForwardMin &&
+      forward <= racketConfig.assistForwardMax &&
+      height >= racketConfig.assistHeightMin &&
+      height <= racketConfig.assistHeightMax;
+
+    return {
+      inZone,
+      zoneQuality: clamp(1 - Math.max(normalizedX, normalizedY) * 0.72, 0.18, 1),
+    };
   }
 
   private chooseShot(player: Player): ShotKind {
@@ -406,22 +458,43 @@ export class BadmintonGame {
     quality: number,
   ): { x: number; y: number } {
     const direction = sideDirection(player.side);
-    const base = {
-      clear: { x: 590, y: -675 },
-      drive: { x: 910, y: -215 },
-      lift: { x: 610, y: -770 },
-      smash: { x: 1160, y: 430 },
-      neutral: { x: 780, y: -420 },
-    } satisfies Record<ShotKind, { x: number; y: number }>;
-    const approachBoost = Math.max(0, direction * player.vx) * 0.18;
-    const qualityScale = 0.82 + quality * 0.32;
-    const edgeTilt = quality < 0.34 ? Math.sin(this.rallyHits * 1.73) * 75 : 0;
+    const opponent = this.players[oppositeSide(player.side)];
+    const nearNet = worldConfig.netX + direction * 155;
+    const deepCourt = direction === 1 ? worldConfig.width - 148 : 148;
+    const midCourt = direction === 1 ? 1180 : 420;
+    const shortCourt = direction === 1 ? 1010 : 590;
+    const minTargetX = Math.min(nearNet, deepCourt);
+    const maxTargetX = Math.max(nearNet, deepCourt);
+    const targetByShot = {
+      clear: { x: deepCourt, y: worldConfig.groundY - 74, t: 1.28, lift: 1.18 },
+      drive: {
+        x: clamp(opponent.x + direction * 76, minTargetX, maxTargetX),
+        y: worldConfig.groundY - 210,
+        t: 0.78,
+        lift: 1.04,
+      },
+      lift: { x: midCourt, y: worldConfig.groundY - 82, t: 1.22, lift: 1.24 },
+      smash: {
+        x: clamp(opponent.x - direction * 64, Math.min(shortCourt, deepCourt), Math.max(shortCourt, deepCourt)),
+        y: worldConfig.groundY - 38,
+        t: 0.48,
+        lift: 0.9,
+      },
+      neutral: { x: midCourt, y: worldConfig.groundY - 145, t: 0.92, lift: 1.08 },
+    } satisfies Record<ShotKind, { x: number; y: number; t: number; lift: number }>;
+    const target = targetByShot[shot];
+    const qualityTargetX = lerp(nearNet, target.x, 0.72 + quality * 0.28);
+    const t = target.t * (1.08 - quality * 0.1);
+    const dx = qualityTargetX - this.shuttle.x;
+    const dy = target.y - this.shuttle.y;
+    const dragCompensation = shot === 'smash' ? 1.08 : 1.16;
+    const approachBoost = Math.max(0, direction * player.vx) * 0.16;
 
     return {
-      x:
-        direction * (base[shot].x + approachBoost) * qualityScale +
-        player.vx * 0.16,
-      y: base[shot].y * qualityScale + player.vy * 0.06 + edgeTilt,
+      x: (dx / t) * dragCompensation + direction * approachBoost,
+      y:
+        ((dy - 0.5 * shuttleConfig.gravity * t * t) / t) * target.lift +
+        player.vy * 0.045,
     };
   }
 
@@ -545,6 +618,7 @@ export class BadmintonGame {
     this.drawPlayer(ctx, this.players.left, '#f8fafc');
     this.drawPlayer(ctx, this.players.right, '#facc15');
     this.drawShuttle(ctx);
+    this.drawImpact(ctx);
   }
 
   private drawCourt(ctx: CanvasRenderingContext2D): void {
@@ -688,6 +762,31 @@ export class BadmintonGame {
       ctx.lineTo(this.shuttle.x - this.shuttle.vx * 0.08, this.shuttle.y - this.shuttle.vy * 0.08);
       ctx.stroke();
     }
+  }
+
+  private drawImpact(ctx: CanvasRenderingContext2D): void {
+    if (this.impactTimer <= 0) {
+      return;
+    }
+
+    const progress = this.impactTimer / 0.18;
+    const radius = 18 + (1 - progress) * 48;
+    ctx.save();
+    ctx.translate(this.impactX, this.impactY);
+    ctx.strokeStyle = `rgba(255,255,255,${0.78 * progress})`;
+    ctx.lineWidth = 5;
+
+    for (let i = 0; i < 8; i += 1) {
+      const angle = (Math.PI * 2 * i) / 8;
+      const inner = radius * 0.34;
+      const outer = radius;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
+      ctx.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer);
+      ctx.stroke();
+    }
+
+    ctx.restore();
   }
 
   private drawHud(ctx: CanvasRenderingContext2D): void {
