@@ -28,17 +28,6 @@ const emptySnapshot: InputSnapshot = {
   pressed: new Set<string>(),
 };
 
-const emptyIntent: PlayerIntent = {
-  move: 0,
-  aimForward: 0,
-  aimVertical: 0,
-  jump: false,
-  jumpPressed: false,
-  swingPressed: false,
-  powerPressed: false,
-  pausePressed: false,
-};
-
 export class BadmintonGame {
   private input = emptySnapshot;
   private phase: GamePhase = 'menu';
@@ -149,7 +138,7 @@ export class BadmintonGame {
       const intent = this.server === 'left' ? leftIntent : rightIntent;
       this.shuttle.updateAttached(serverPlayer);
 
-      if (intent.swingPressed || intent.powerPressed) {
+      if (intent.hitPressed) {
         this.launchServe(serverPlayer);
       }
 
@@ -219,34 +208,23 @@ export class BadmintonGame {
         ? {
             left: 'KeyA',
             right: 'KeyD',
-            down: 'KeyS',
             up: 'KeyW',
-            swing: 'KeyF',
-            power: 'KeyG',
+            hit: 'KeyS',
           }
         : {
             left: 'ArrowLeft',
             right: 'ArrowRight',
-            down: 'ArrowDown',
             up: 'ArrowUp',
-            swing: 'KeyK',
-            power: 'KeyL',
+            hit: 'ArrowDown',
           };
     const moveWorld =
       (this.isDown(keys.right) ? 1 : 0) - (this.isDown(keys.left) ? 1 : 0);
-    const towardNet = sideDirection(side);
-    const aimForward = moveWorld === 0 ? 0 : moveWorld === towardNet ? 1 : -1;
-    const aimVertical =
-      (this.isDown(keys.down) ? 1 : 0) - (this.isDown(keys.up) ? 1 : 0);
 
     return {
       move: moveWorld,
-      aimForward,
-      aimVertical,
       jump: this.isDown(keys.up),
       jumpPressed: this.wasPressed(keys.up),
-      swingPressed: this.wasPressed(keys.swing),
-      powerPressed: this.wasPressed(keys.power),
+      hitPressed: this.wasPressed(keys.hit),
       pausePressed: this.wasPressed('Escape') || this.wasPressed('KeyP'),
     };
   }
@@ -314,10 +292,8 @@ export class BadmintonGame {
       player.vx = 0;
     }
 
-    if (intent.powerPressed) {
-      player.startSwing('power');
-    } else if (intent.swingPressed) {
-      player.startSwing('normal');
+    if (intent.hitPressed) {
+      player.startSwing();
     }
 
     player.updateSwing(dt);
@@ -330,8 +306,8 @@ export class BadmintonGame {
     this.shuttle.attachedTo = player.side;
     this.shuttle.x = player.x + direction * 90;
     this.shuttle.y = player.y - 136;
-    this.shuttle.vx = direction * 560;
-    this.shuttle.vy = -560;
+    this.shuttle.vx = direction * 650;
+    this.shuttle.vy = -625;
     this.rallyHits = 0;
     this.message = '';
   }
@@ -382,20 +358,11 @@ export class BadmintonGame {
       return;
     }
 
-    const humanIntent =
-      this.mode === 'single' && player.side === 'right'
-        ? null
-        : this.getHumanIntent(player.side);
-    const aiIntent =
-      this.mode === 'single' && player.side === 'right'
-        ? createAiIntent(player, this.players.left, this.shuttle, 0)
-        : null;
-    const intent = humanIntent ?? aiIntent ?? emptyIntent;
     const timing = 1 - Math.abs(player.activeProgress - 0.5) * 2;
     const center = 1 - clamp(hitDistance / threshold, 0, 1);
-    const quality = clamp(0.18 + center * 0.56 + timing * 0.38, 0, 1);
-    const shot = this.chooseShot(player, intent);
-    const velocity = this.getShotVelocity(player, intent, shot, quality);
+    const quality = clamp(0.38 + center * 0.42 + timing * 0.28, 0, 1);
+    const shot = this.chooseShot(player);
+    const velocity = this.getShotVelocity(player, shot, quality);
 
     player.swingHasHit = true;
     this.shuttle.lastTouchedBy = player.side;
@@ -408,28 +375,25 @@ export class BadmintonGame {
     this.lastHitTimer = 0.72;
   }
 
-  private chooseShot(player: Player, intent: PlayerIntent): ShotKind {
-    if (
-      player.swingType === 'power' &&
-      !player.grounded &&
-      this.shuttle.y < worldConfig.groundY - 130
-    ) {
+  private chooseShot(player: Player): ShotKind {
+    const netTop = worldConfig.groundY - worldConfig.netHeight;
+    const heightAboveGround = worldConfig.groundY - this.shuttle.y;
+    const nearNet = Math.abs(this.shuttle.x - worldConfig.netX) < 180;
+    const movingForward = sideDirection(player.side) * player.vx > 90;
+
+    if (!player.grounded && this.shuttle.y < netTop - 10 && heightAboveGround > 230) {
       return 'smash';
     }
 
-    if (intent.aimVertical > 0) {
-      return 'drop';
-    }
-
-    if (intent.aimVertical < 0 && intent.aimForward < 0) {
+    if (this.shuttle.y > netTop + 40 || heightAboveGround < 150) {
       return 'lift';
     }
 
-    if (intent.aimVertical < 0) {
+    if (!movingForward && heightAboveGround > 270) {
       return 'clear';
     }
 
-    if (intent.aimForward > 0 || player.swingType === 'power') {
+    if (movingForward || nearNet) {
       return 'drive';
     }
 
@@ -438,26 +402,24 @@ export class BadmintonGame {
 
   private getShotVelocity(
     player: Player,
-    intent: PlayerIntent,
     shot: ShotKind,
     quality: number,
   ): { x: number; y: number } {
     const direction = sideDirection(player.side);
     const base = {
       clear: { x: 590, y: -675 },
-      drive: { x: 870, y: -165 },
-      drop: { x: 365, y: -105 },
-      lift: { x: 525, y: -735 },
-      smash: { x: 1060, y: 390 },
-      neutral: { x: 700, y: -385 },
+      drive: { x: 910, y: -215 },
+      lift: { x: 610, y: -770 },
+      smash: { x: 1160, y: 430 },
+      neutral: { x: 780, y: -420 },
     } satisfies Record<ShotKind, { x: number; y: number }>;
-    const qualityScale = 0.74 + quality * 0.38;
-    const forwardBonus = intent.aimForward > 0 ? 32 : 0;
+    const approachBoost = Math.max(0, direction * player.vx) * 0.18;
+    const qualityScale = 0.82 + quality * 0.32;
     const edgeTilt = quality < 0.34 ? Math.sin(this.rallyHits * 1.73) * 75 : 0;
 
     return {
       x:
-        direction * (base[shot].x + forwardBonus) * qualityScale +
+        direction * (base[shot].x + approachBoost) * qualityScale +
         player.vx * 0.16,
       y: base[shot].y * qualityScale + player.vy * 0.06 + edgeTilt,
     };
@@ -537,8 +499,8 @@ export class BadmintonGame {
     this.winner = null;
     this.message =
       mode === 'single'
-        ? 'Single Player: A/D/W/F/G'
-        : 'Local Versus: P1 A/D/W/F/G, P2 Arrows/K/L';
+        ? 'Single Player: A/D move, W jump, S hit'
+        : 'Local Versus: P1 A/D/W/S, P2 arrows/down';
     this.resetPlayers();
     this.resetRally(this.server);
   }
@@ -769,7 +731,7 @@ export class BadmintonGame {
         : this.phase === 'matchEnd'
           ? 'Enter/R rematch, M menu'
           : isAttached
-            ? 'Swing to serve'
+            ? this.getServeHint()
             : '';
 
     if (!text) {
@@ -785,6 +747,14 @@ export class BadmintonGame {
     ctx.fillText(text, worldConfig.width / 2, 352);
     ctx.font = '500 22px Inter, sans-serif';
     ctx.fillText(hint, worldConfig.width / 2, 400);
+  }
+
+  private getServeHint(): string {
+    if (this.mode === 'single' && this.server === 'right') {
+      return 'AI serving';
+    }
+
+    return this.server === 'left' ? 'Press S to serve' : 'Press Down to serve';
   }
 
   private drawMenu(ctx: CanvasRenderingContext2D): void {
@@ -803,8 +773,8 @@ export class BadmintonGame {
 
     ctx.font = '500 23px Inter, sans-serif';
     ctx.fillStyle = 'rgba(255,255,255,0.82)';
-    ctx.fillText('P1: A/D move, W jump, F swing, G power', worldConfig.width / 2, 632);
-    ctx.fillText('P2: arrows move/jump, K swing, L power', worldConfig.width / 2, 672);
+    ctx.fillText('P1: A/D move, W jump, S hit', worldConfig.width / 2, 632);
+    ctx.fillText('P2: arrows move/jump, Down hit', worldConfig.width / 2, 672);
     ctx.fillText('P pause, R restart, H debug', worldConfig.width / 2, 712);
   }
 

@@ -25,9 +25,6 @@ export class Player {
       serveTimer: 0,
       decisionTimer: 0,
       targetX: this.homeX,
-      aimForward: 1,
-      aimVertical: -1,
-      wantsPower: false,
     };
   }
 
@@ -52,19 +49,7 @@ export class Player {
   }
 
   get swingDuration(): number {
-    if (this.swingType === 'power') {
-      return (
-        racketConfig.powerWindup +
-        racketConfig.powerActive +
-        racketConfig.powerRecovery
-      );
-    }
-
-    return (
-      racketConfig.normalWindup +
-      racketConfig.normalActive +
-      racketConfig.normalRecovery
-    );
+    return racketConfig.windup + racketConfig.active + racketConfig.recovery;
   }
 
   get swingPhase(): 'idle' | 'windup' | 'active' | 'recovery' {
@@ -72,14 +57,8 @@ export class Player {
       return 'idle';
     }
 
-    const windup =
-      this.swingType === 'power'
-        ? racketConfig.powerWindup
-        : racketConfig.normalWindup;
-    const active =
-      this.swingType === 'power'
-        ? racketConfig.powerActive
-        : racketConfig.normalActive;
+    const windup = racketConfig.windup;
+    const active = racketConfig.active;
 
     if (this.swingTimer < windup) {
       return 'windup';
@@ -97,24 +76,18 @@ export class Player {
       return 0;
     }
 
-    const windup =
-      this.swingType === 'power'
-        ? racketConfig.powerWindup
-        : racketConfig.normalWindup;
-    const active =
-      this.swingType === 'power'
-        ? racketConfig.powerActive
-        : racketConfig.normalActive;
+    const windup = racketConfig.windup;
+    const active = racketConfig.active;
 
     return clamp((this.swingTimer - windup) / active, 0, 1);
   }
 
-  startSwing(type: SwingType): void {
+  startSwing(): void {
     if (this.isSwinging) {
       return;
     }
 
-    this.swingType = type;
+    this.swingType = 'hit';
     this.swingTimer = 0;
     this.swingHasHit = false;
   }
@@ -165,14 +138,8 @@ export class Player {
         ? this.activeProgress
         : clamp(this.swingTimer / this.swingDuration, 0, 1);
 
-    if (this.swingType === 'power') {
-      const start = direction === 1 ? -2.15 : -0.99;
-      const end = direction === 1 ? 0.63 : Math.PI - 0.63;
-      return start + (end - start) * progress;
-    }
-
-    const start = direction === 1 ? -1.82 : -1.32;
-    const end = direction === 1 ? 0.28 : Math.PI - 0.28;
+    const start = direction === 1 ? -1.95 : -1.19;
+    const end = direction === 1 ? 0.42 : Math.PI - 0.42;
     return start + (end - start) * progress;
   }
 }

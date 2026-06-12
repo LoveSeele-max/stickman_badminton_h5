@@ -6,9 +6,9 @@ export type GamePhase = 'menu' | 'playing' | 'paused' | 'point' | 'matchEnd';
 
 export type ShuttleState = 'attached' | 'flying' | 'grounded' | 'out';
 
-export type SwingType = 'normal' | 'power';
+export type SwingType = 'hit';
 
-export type ShotKind = 'clear' | 'drive' | 'drop' | 'lift' | 'smash' | 'neutral';
+export type ShotKind = 'clear' | 'drive' | 'lift' | 'smash' | 'neutral';
 
 export interface Vec2 {
   x: number;
@@ -22,12 +22,9 @@ export interface InputSnapshot {
 
 export interface PlayerIntent {
   move: number;
-  aimForward: number;
-  aimVertical: number;
   jump: boolean;
   jumpPressed: boolean;
-  swingPressed: boolean;
-  powerPressed: boolean;
+  hitPressed: boolean;
   pausePressed: boolean;
 }
 
@@ -44,7 +41,4 @@ export interface AiMemory {
   serveTimer: number;
   decisionTimer: number;
   targetX: number;
-  aimForward: number;
-  aimVertical: number;
-  wantsPower: boolean;
 }

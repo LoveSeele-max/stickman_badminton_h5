@@ -11,33 +11,30 @@ export const worldConfig = {
 export const playerConfig = {
   height: 170,
   radius: 38,
-  maxSpeed: 420,
-  acceleration: 2800,
-  groundFriction: 18,
+  maxSpeed: 450,
+  acceleration: 3100,
+  groundFriction: 20,
   airControl: 0.46,
-  jumpSpeed: 720,
+  jumpSpeed: 745,
   gravity: 1950,
   coyoteTime: 0.08,
-  jumpBuffer: 0.12,
+  jumpBuffer: 0.14,
 };
 
 export const racketConfig = {
-  length: 108,
-  hitRadius: 34,
-  normalWindup: 0.07,
-  normalActive: 0.12,
-  normalRecovery: 0.18,
-  powerWindup: 0.11,
-  powerActive: 0.1,
-  powerRecovery: 0.34,
+  length: 118,
+  hitRadius: 48,
+  windup: 0.045,
+  active: 0.16,
+  recovery: 0.16,
 };
 
 export const shuttleConfig = {
   radius: 15,
-  gravity: 1040,
-  linearDrag: 0.28,
-  quadraticDrag: 0.00046,
-  maxSpeed: 1250,
+  gravity: 1000,
+  linearDrag: 0.22,
+  quadraticDrag: 0.00038,
+  maxSpeed: 1450,
 };
 
 export const matchConfig = {

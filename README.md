@@ -17,10 +17,8 @@ repository.
 | Action | P1 | P2 |
 |---|---|---|
 | Move | A / D | Left / Right |
-| Jump / aim up | W | Up |
-| Aim down | S | Down |
-| Swing | F | K |
-| Power swing | G | L |
+| Jump | W | Up |
+| Hit / serve | S | Down |
 | Pause | P / Esc | P / Esc |
 | Restart | R | R |
 | Menu | M | M |

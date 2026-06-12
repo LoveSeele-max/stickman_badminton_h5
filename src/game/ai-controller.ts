@@ -17,12 +17,9 @@ export const createAiIntent = (
     player.ai.serveTimer += dt;
     return {
       move: 0,
-      aimForward: 1,
-      aimVertical: -1,
       jump: false,
       jumpPressed: false,
-      swingPressed: player.ai.serveTimer > aiConfig.serveDelay,
-      powerPressed: false,
+      hitPressed: player.ai.serveTimer > aiConfig.serveDelay,
       pausePressed: emptyPause,
     };
   }
@@ -38,9 +35,11 @@ export const createAiIntent = (
       player.minX,
       player.maxX,
     );
-    player.ai.aimForward = pressure ? 1 : 0;
-    player.ai.aimVertical = prediction.highBall ? 1 : -1;
-    player.ai.wantsPower = prediction.highBall && prediction.isThreat && Math.random() > 0.42;
+
+    if (pressure && prediction.isThreat) {
+      player.ai.targetX += sideDirection(player.side) * 18;
+    }
+
     player.ai.decisionTimer = aiConfig.reactionInterval;
   }
 
@@ -66,12 +65,9 @@ export const createAiIntent = (
 
   return {
     move,
-    aimForward: player.ai.aimForward,
-    aimVertical: player.ai.aimVertical,
     jump: shouldJump,
     jumpPressed: shouldJump && player.grounded,
-    swingPressed: shouldSwing && !player.ai.wantsPower,
-    powerPressed: shouldSwing && player.ai.wantsPower,
+    hitPressed: shouldSwing,
     pausePressed: emptyPause,
   };
 };
