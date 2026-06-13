@@ -117,19 +117,62 @@ const predictTarget = (
   let y = shuttle.y;
   let vx = shuttle.vx;
   let vy = shuttle.vy;
+  let dragGraceTimer = shuttle.dragGraceTimer;
+  let flightTimer = shuttle.flightTimer;
   let bestX = side === 'left' ? 360 : 1240;
   let bestY = worldConfig.groundY;
   let sawOwnSide = false;
   const step = 1 / 90;
 
   for (let i = 0; i < 330; i += 1) {
-    const speed = Math.hypot(vx, vy);
-    const drag =
-      1 - Math.min(0.82, (shuttleConfig.linearDrag + shuttleConfig.quadraticDrag * speed) * step);
-    vx *= drag;
-    vy = vy * drag + shuttleConfig.gravity * step;
+    const dragProgress = clamp(
+      1 - dragGraceTimer / shuttleConfig.postHitDragGrace,
+      0,
+      1,
+    );
+    const smoothProgress = smoothstep(dragProgress);
+    const lateProgress = smoothstep(clamp((flightTimer - 0.24) / 0.48, 0, 1));
+    const startDragScale = lerp(
+      shuttleConfig.initialDragScale,
+      1,
+      smoothProgress,
+    );
+    const horizontalDragScale = lerp(
+      startDragScale,
+      shuttleConfig.lateHorizontalDragScale,
+      lateProgress,
+    );
+    const verticalDragScale =
+      vy > 0
+        ? lerp(startDragScale, shuttleConfig.descentDragScale, lateProgress)
+        : startDragScale;
+    const horizontalDrag =
+      1 -
+      Math.min(
+        0.82,
+        (shuttleConfig.horizontalLinearDrag +
+          shuttleConfig.horizontalQuadraticDrag * Math.abs(vx)) *
+          horizontalDragScale *
+          step,
+      );
+    const verticalDrag =
+      1 -
+      Math.min(
+        0.72,
+        (shuttleConfig.verticalLinearDrag +
+          shuttleConfig.verticalQuadraticDrag * Math.abs(vy)) *
+          verticalDragScale *
+          step,
+      );
+    vx *= horizontalDrag;
+    vy = Math.min(
+      vy * verticalDrag + shuttleConfig.gravity * step,
+      shuttleConfig.maxFallSpeed,
+    );
     x += vx * step;
     y += vy * step;
+    dragGraceTimer = Math.max(0, dragGraceTimer - step);
+    flightTimer += step;
 
     if (isOnSide(x, side)) {
       sawOwnSide = true;
@@ -163,3 +206,12 @@ const predictTarget = (
 
 const isOnSide = (x: number, side: Side): boolean =>
   side === 'left' ? x < worldConfig.netX : x > worldConfig.netX;
+
+const lerp = (from: number, to: number, t: number): number =>
+  from + (to - from) * t;
+
+const smoothstep = (value: number): number => {
+  const t = clamp(value, 0, 1);
+
+  return t * t * (3 - 2 * t);
+};

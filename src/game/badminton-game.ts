@@ -394,9 +394,12 @@ export class BadmintonGame {
     this.shuttle.attachedTo = player.side;
     this.shuttle.x = player.x + direction * 90;
     this.shuttle.y = player.y - 136;
+    this.shuttle.previousX = this.shuttle.x;
+    this.shuttle.previousY = this.shuttle.y;
     this.shuttle.vx = direction * 650;
     this.shuttle.vy = -625;
     this.shuttle.dragGraceTimer = shuttleConfig.postHitDragGrace * 0.5;
+    this.shuttle.flightTimer = 0;
     this.rallyHits = 0;
     this.message = '';
   }
@@ -406,24 +409,61 @@ export class BadmintonGame {
       return;
     }
 
-    const speed = Math.hypot(this.shuttle.vx, this.shuttle.vy);
-    const dragScale =
-      this.shuttle.dragGraceTimer > 0 ? shuttleConfig.initialDragScale : 1;
-    const drag =
+    this.shuttle.previousX = this.shuttle.x;
+    this.shuttle.previousY = this.shuttle.y;
+
+    const dragProgress = clamp(
+      1 - this.shuttle.dragGraceTimer / shuttleConfig.postHitDragGrace,
+      0,
+      1,
+    );
+    const smoothProgress = smoothstep(dragProgress);
+    const lateProgress = smoothstep(
+      clamp((this.shuttle.flightTimer - 0.24) / 0.48, 0, 1),
+    );
+    const startDragScale = lerp(
+      shuttleConfig.initialDragScale,
+      1,
+      smoothProgress,
+    );
+    const horizontalDragScale = lerp(
+      startDragScale,
+      shuttleConfig.lateHorizontalDragScale,
+      lateProgress,
+    );
+    const verticalDragScale =
+      this.shuttle.vy > 0
+        ? lerp(startDragScale, shuttleConfig.descentDragScale, lateProgress)
+        : startDragScale;
+    const horizontalSpeed = Math.abs(this.shuttle.vx);
+    const verticalSpeed = Math.abs(this.shuttle.vy);
+    const horizontalDrag =
       1 -
       Math.min(
-        0.86,
-        (shuttleConfig.linearDrag + shuttleConfig.quadraticDrag * speed) *
-          dragScale *
+        0.84,
+        (shuttleConfig.horizontalLinearDrag +
+          shuttleConfig.horizontalQuadraticDrag * horizontalSpeed) *
+          horizontalDragScale *
           dt,
       );
-    this.shuttle.vx *= drag;
-    this.shuttle.vy = this.shuttle.vy * drag + shuttleConfig.gravity * dt;
+    const verticalDrag =
+      1 -
+      Math.min(
+        0.72,
+        (shuttleConfig.verticalLinearDrag +
+          shuttleConfig.verticalQuadraticDrag * verticalSpeed) *
+          verticalDragScale *
+          dt,
+      );
+    this.shuttle.vx *= horizontalDrag;
+    this.shuttle.vy = this.shuttle.vy * verticalDrag + shuttleConfig.gravity * dt;
+    this.shuttle.vy = Math.min(this.shuttle.vy, shuttleConfig.maxFallSpeed);
     this.shuttle.clampSpeed();
     this.shuttle.x += this.shuttle.vx * dt;
     this.shuttle.y += this.shuttle.vy * dt;
     this.shuttle.netCooldown = Math.max(0, this.shuttle.netCooldown - dt);
     this.shuttle.dragGraceTimer = Math.max(0, this.shuttle.dragGraceTimer - dt);
+    this.shuttle.flightTimer += dt;
   }
 
   private resolveRacketHits(
@@ -457,10 +497,21 @@ export class BadmintonGame {
     const previousRacket = player.getRacketLineAtSwingTimer(
       Math.max(racketConfig.windup, player.swingTimer - dt),
     );
+    const previousShuttle = this.shuttle.previousPosition;
+    const middleShuttle = midpoint(previousShuttle, this.shuttle.position);
+    const middleRacket = {
+      start: midpoint(previousRacket.start, racket.start),
+      end: midpoint(previousRacket.end, racket.end),
+    };
     const previousProjection = projectPointToSegment(
-      this.shuttle.position,
+      previousShuttle,
       previousRacket.start,
       previousRacket.end,
+    );
+    const middleProjection = projectPointToSegment(
+      middleShuttle,
+      middleRacket.start,
+      middleRacket.end,
     );
     const threshold = racketConfig.hitRadius + shuttleConfig.radius;
     const sweepThreshold = threshold * 0.86;
@@ -477,6 +528,7 @@ export class BadmintonGame {
     const candidates = [
       { projection: currentProjection, distance: currentProjection.distance, threshold },
       { projection: previousProjection, distance: previousProjection.distance, threshold },
+      { projection: middleProjection, distance: middleProjection.distance, threshold },
       {
         projection: { ...sweetSweep, t: 0.74 },
         distance: sweetSweep.distance,
@@ -513,7 +565,22 @@ export class BadmintonGame {
     );
     const lockedIntent = this.getHitIntent(player, intent);
     const shot = this.chooseShot(player, contact, lockedIntent);
-    const velocity = this.getShotVelocity(player, shot, quality, contact, lockedIntent);
+    const racketVelocity = this.getRacketContactVelocity(
+      previousRacket,
+      racket,
+      contact.t,
+      dt,
+    );
+    const incomingVelocity = { x: this.shuttle.vx, y: this.shuttle.vy };
+    const velocity = this.getShotVelocity(
+      player,
+      shot,
+      quality,
+      contact,
+      lockedIntent,
+      racketVelocity,
+      incomingVelocity,
+    );
 
     player.swingHasHit = true;
     player.hitIntentTimer = 0;
@@ -521,12 +588,15 @@ export class BadmintonGame {
     this.shuttle.vx = velocity.x;
     this.shuttle.vy = velocity.y;
     this.shuttle.dragGraceTimer = shuttleConfig.postHitDragGrace;
+    this.shuttle.flightTimer = 0;
     this.shuttle.x = contact.point.x + sideDirection(player.side) * 18;
     this.shuttle.y = clamp(
       contact.point.y,
       player.y - racketConfig.assistHeightMax,
       player.y - racketConfig.assistHeightMin,
     );
+    this.shuttle.previousX = this.shuttle.x;
+    this.shuttle.previousY = this.shuttle.y;
     this.rallyHits += 1;
     this.lastHitLabel = `${contact.label} ${shot}`;
     this.lastHitTimer = 0.72;
@@ -707,7 +777,9 @@ export class BadmintonGame {
     quality: number,
     contact: HitContact,
     intent: HitIntentLock,
-  ): { x: number; y: number } {
+    racketVelocity: Vec2,
+    incomingVelocity: Vec2,
+  ): Vec2 {
     const direction = sideDirection(player.side);
     const forwardInput = direction * intent.move;
     const opponent = this.players[oppositeSide(player.side)];
@@ -717,111 +789,201 @@ export class BadmintonGame {
     const shortCourt = direction === 1 ? 1010 : 590;
     const minTargetX = Math.min(nearNet, deepCourt);
     const maxTargetX = Math.max(nearNet, deepCourt);
-    const targetByShot = {
-      clear: { x: deepCourt, y: worldConfig.groundY - 78, t: 1.2, lift: 1.1 },
+    const heightAboveGround = worldConfig.groundY - this.shuttle.y;
+    const lowContact = clamp((180 - heightAboveGround) / 150, 0, 1);
+    const highContact = clamp((heightAboveGround - 260) / 260, 0, 1);
+    const incomingSpeed = Math.hypot(incomingVelocity.x, incomingVelocity.y);
+    const incomingToward = Math.max(0, -direction * incomingVelocity.x);
+    const incomingAway = Math.max(0, direction * incomingVelocity.x);
+    const sweetness = 1 - clamp(Math.abs(contact.t - 0.74) / 0.42, 0, 1);
+    const cleanHit = clamp(quality * 0.72 + sweetness * 0.28, 0, 1);
+    const profileByShot = {
+      clear: {
+        aim: 0.24,
+        angle: -0.58,
+        baseSpeed: 1180,
+        maxSpeed: 1500,
+        minForward: 620,
+        minSpeed: 930,
+      },
       drive: {
-        x: clamp(opponent.x + direction * 76, minTargetX, maxTargetX),
-        y: worldConfig.groundY - 210,
-        t: 0.58,
-        lift: 0.86,
+        aim: 0.17,
+        angle: -0.06,
+        baseSpeed: 1380,
+        maxSpeed: 1780,
+        minForward: 980,
+        minSpeed: 1120,
       },
-      lift: { x: midCourt, y: worldConfig.groundY - 86, t: 1.14, lift: 1.18 },
+      lift: {
+        aim: 0.22,
+        angle: -0.88,
+        baseSpeed: 1080,
+        maxSpeed: 1380,
+        minForward: 460,
+        minSpeed: 840,
+      },
       smash: {
-        x: clamp(opponent.x - direction * 64, Math.min(shortCourt, deepCourt), Math.max(shortCourt, deepCourt)),
-        y: worldConfig.groundY - 42,
-        t: 0.42,
-        lift: 0.74,
+        aim: 0.12,
+        angle: 0.46,
+        baseSpeed: 1640,
+        maxSpeed: 2050,
+        minForward: 700,
+        minSpeed: 1320,
       },
-      neutral: { x: midCourt, y: worldConfig.groundY - 150, t: 0.78, lift: 0.96 },
-    } satisfies Record<ShotKind, { x: number; y: number; t: number; lift: number }>;
+      neutral: {
+        aim: 0.2,
+        angle: -0.24,
+        baseSpeed: 1050,
+        maxSpeed: 1350,
+        minForward: 520,
+        minSpeed: 820,
+      },
+    } satisfies Record<
+      ShotKind,
+      {
+        aim: number;
+        angle: number;
+        baseSpeed: number;
+        maxSpeed: number;
+        minForward: number;
+        minSpeed: number;
+      }
+    >;
+    const targetByShot = {
+      clear: { x: deepCourt, y: worldConfig.groundY - 78, t: 1.18 },
+      drive: {
+        x: clamp(opponent.x + direction * 110, minTargetX, maxTargetX),
+        y: worldConfig.groundY - 205,
+        t: 0.62,
+      },
+      lift: { x: midCourt, y: worldConfig.groundY - 86, t: 1.08 },
+      smash: {
+        x: clamp(
+          opponent.x - direction * 72,
+          Math.min(shortCourt, deepCourt),
+          Math.max(shortCourt, deepCourt),
+        ),
+        y: worldConfig.groundY - 44,
+        t: 0.44,
+      },
+      neutral: { x: midCourt, y: worldConfig.groundY - 150, t: 0.82 },
+    } satisfies Record<ShotKind, { x: number; y: number; t: number }>;
+    const profile = profileByShot[shot];
     const target = targetByShot[shot];
-    const comboDistance =
-      forwardInput > 0 ? 1.08 : forwardInput < 0 ? 0.94 : 1 + Math.abs(player.vx) / 3600;
-    const comboArc =
-      intent.jump || !player.grounded ? 0.92 : forwardInput < 0 ? 1.12 : 1;
-    const comboPower =
+    let launchAngle =
+      profile.angle -
+      lowContact * 0.22 +
+      (shot === 'smash' ? highContact * 0.18 : highContact * 0.04);
+
+    if (forwardInput > 0) {
+      launchAngle += shot === 'smash' ? 0.04 : 0.06;
+    } else if (forwardInput < 0) {
+      launchAngle -= 0.2;
+    }
+
+    if (contact.zone === 'handle') {
+      launchAngle -= 0.12;
+    } else if (contact.zone === 'tip' || contact.zone === 'sweet') {
+      launchAngle += shot === 'smash' ? 0.08 : 0.03;
+    }
+
+    const intentPower =
       1 +
-      (forwardInput > 0 ? 0.14 : 0) +
+      (forwardInput > 0 ? 0.1 : 0) +
       (intent.jump || !player.grounded ? 0.08 : 0);
-    const qualityTargetX = lerp(
-      nearNet,
-      target.x,
-      clamp(
-        (0.72 + quality * 0.28) * contact.distanceScale * comboDistance,
-        0.42,
-        1.18,
-      ),
-    );
-    const t =
-      (target.t * (1.08 - quality * 0.1)) /
-      Math.sqrt(contact.powerScale * comboPower);
-    const dx = qualityTargetX - this.shuttle.x;
-    const dy = target.y - this.shuttle.y;
-    const dragCompensation =
-      (shot === 'smash' ? 1.12 : shot === 'drive' ? 1.08 : 1.18) *
-      contact.powerScale *
-      comboPower;
-    const approachBoost = Math.max(0, direction * player.vx) * 0.24;
+    const slowTouchScale =
+      contact.zone === 'edge' || contact.zone === 'handle'
+        ? lerp(0.88, 1, clamp(incomingSpeed / 720, 0, 1))
+        : 1;
+    const borrowedSpeed =
+      incomingToward * (0.14 + cleanHit * 0.12) * contact.powerScale -
+      incomingAway * (0.04 + (1 - cleanHit) * 0.08);
+    const speed =
+      (profile.baseSpeed * contact.powerScale * lerp(0.9, 1.13, cleanHit) +
+        borrowedSpeed) *
+      intentPower *
+      slowTouchScale;
+    const velocity = {
+      x: direction * Math.cos(launchAngle) * speed,
+      y: Math.sin(launchAngle) * speed,
+    };
+    const racketBlend = 0.13 + cleanHit * 0.08;
+    velocity.x += racketVelocity.x * racketBlend + player.vx * 0.22;
+    velocity.y +=
+      racketVelocity.y * (shot === 'lift' || shot === 'clear' ? 0.045 : 0.095) +
+      player.vy * 0.04 -
+      incomingVelocity.y * (0.04 + cleanHit * 0.04);
+    velocity.x += -incomingVelocity.x * (0.08 + cleanHit * 0.08);
+
+    const aimVelocity = {
+      x: (target.x - this.shuttle.x) / target.t,
+      y:
+        (target.y -
+          this.shuttle.y -
+          0.5 * shuttleConfig.gravity * target.t * target.t) /
+        target.t,
+    };
+    const aimStrength =
+      profile.aim * lerp(0.55, 1, cleanHit) * clamp(contact.distanceScale, 0.78, 1.16);
+    velocity.x +=
+      clamp(aimVelocity.x - velocity.x, -320, 320) * aimStrength;
+    velocity.y +=
+      clamp(aimVelocity.y - velocity.y, -260, 260) * aimStrength;
+
     const edgeFlutter =
       contact.zone === 'edge'
         ? Math.sin(this.rallyHits * 1.91 + contact.t * 6) * 42
         : 0;
-    const velocity = {
-      x: (dx / t) * dragCompensation + direction * approachBoost,
-      y:
-        ((dy - 0.5 * shuttleConfig.gravity * t * t) / t) *
-          target.lift *
-          contact.arcScale *
-          comboArc +
-        player.vy * 0.045 +
-        edgeFlutter,
-    };
+    velocity.y += edgeFlutter * contact.arcScale;
+    const clamped = this.clampShotVelocity(
+      velocity,
+      profile.minSpeed * lerp(0.92, 1.04, cleanHit),
+      profile.maxSpeed * lerp(0.96, 1.06, cleanHit),
+    );
+    const forwardSpeed = direction * clamped.x;
+    const minForward =
+      profile.minForward *
+      (shot === 'drive' || shot === 'smash' ? lerp(0.9, 1.04, cleanHit) : 1);
 
-    return this.applyShotSpeedFloor(velocity, shot, quality, contact, direction);
+    if (forwardSpeed < minForward) {
+      clamped.x += direction * (minForward - forwardSpeed) * 0.55;
+    }
+
+    return clamped;
   }
 
-  private applyShotSpeedFloor(
-    velocity: { x: number; y: number },
-    shot: ShotKind,
-    quality: number,
-    contact: HitContact,
-    direction: number,
-  ): { x: number; y: number } {
-    const floorByShot = {
-      clear: 1020,
-      drive: 1320,
-      lift: 960,
-      smash: 1580,
-      neutral: 980,
-    } satisfies Record<ShotKind, number>;
-    const faceBoost = {
-      handle: 0.92,
-      center: 1,
-      sweet: 1.16,
-      tip: 1.08,
-      edge: 0.82,
-    } satisfies Record<FaceZone, number>;
-    const minSpeed =
-      floorByShot[shot] * faceBoost[contact.zone] * lerp(0.94, 1.08, quality);
+  private getRacketContactVelocity(
+    previousRacket: { start: Vec2; end: Vec2 },
+    racket: { start: Vec2; end: Vec2 },
+    t: number,
+    dt: number,
+  ): Vec2 {
+    const previousPoint = pointOnSegment(previousRacket, t);
+    const currentPoint = pointOnSegment(racket, t);
+
+    return {
+      x: (currentPoint.x - previousPoint.x) / Math.max(dt, 1 / 240),
+      y: (currentPoint.y - previousPoint.y) / Math.max(dt, 1 / 240),
+    };
+  }
+
+  private clampShotVelocity(velocity: Vec2, minSpeed: number, maxSpeed: number): Vec2 {
     const speed = Math.hypot(velocity.x, velocity.y);
 
     if (speed < minSpeed) {
       const scale = minSpeed / Math.max(speed, 1);
-      velocity.x *= scale;
-      velocity.y *= scale;
+      return {
+        x: velocity.x * scale,
+        y: velocity.y * scale,
+      };
     }
 
-    const minHorizontal =
-      shot === 'drive'
-        ? 1180
-        : shot === 'smash'
-          ? 920
-          : shot === 'clear'
-            ? 760
-            : 0;
-
-    if (Math.abs(velocity.x) < minHorizontal) {
-      velocity.x = direction * minHorizontal;
+    if (speed > maxSpeed) {
+      const scale = maxSpeed / speed;
+      return {
+        x: velocity.x * scale,
+        y: velocity.y * scale,
+      };
     }
 
     return velocity;
@@ -849,15 +1011,38 @@ export class BadmintonGame {
       return;
     }
 
-    this.shuttle.x =
-      this.shuttle.x < worldConfig.netX
-        ? netRect.x - shuttleConfig.radius
-        : netRect.x + netRect.width + shuttleConfig.radius;
-    this.shuttle.vx *= -0.28;
-    this.shuttle.vy = Math.max(120, this.shuttle.vy * 0.55);
+    const speed = Math.hypot(this.shuttle.vx, this.shuttle.vy);
+    const hitTop =
+      this.shuttle.previousY + shuttleConfig.radius <= netRect.y &&
+      this.shuttle.y + shuttleConfig.radius >= netRect.y &&
+      Math.abs(this.shuttle.x - worldConfig.netX) <
+        worldConfig.netWidth / 2 + shuttleConfig.radius + 28;
+    const hardNetHit = speed > 1320 || Math.abs(this.shuttle.vx) > 1120;
+
+    if (hitTop) {
+      this.shuttle.y = netRect.y - shuttleConfig.radius - 1;
+      this.shuttle.vx *= hardNetHit ? 0.42 : 0.66;
+      this.shuttle.vy = Math.max(
+        hardNetHit ? 180 : 86,
+        Math.abs(this.shuttle.vy) * (hardNetHit ? 0.18 : 0.28),
+      );
+      this.lastHitLabel = hardNetHit ? 'Tape Drop' : 'Tape';
+    } else {
+      this.shuttle.x =
+        this.shuttle.x < worldConfig.netX
+          ? netRect.x - shuttleConfig.radius
+          : netRect.x + netRect.width + shuttleConfig.radius;
+      this.shuttle.vx *= hardNetHit ? -0.1 : -0.3;
+      this.shuttle.vy = Math.max(
+        hardNetHit ? 280 : 120,
+        this.shuttle.vy * (hardNetHit ? 0.74 : 0.55),
+      );
+      this.lastHitLabel = hardNetHit ? 'Net Drop' : 'Net';
+    }
+
     this.shuttle.netCooldown = 0.15;
     this.shuttle.dragGraceTimer = 0;
-    this.lastHitLabel = 'Net';
+    this.shuttle.flightTimer += 0.18;
     this.lastHitTimer = 0.5;
   }
 
@@ -1336,3 +1521,14 @@ const pointOnSegment = (
   x: lerp(line.start.x, line.end.x, t),
   y: lerp(line.start.y, line.end.y, t),
 });
+
+const midpoint = (a: Vec2, b: Vec2): Vec2 => ({
+  x: (a.x + b.x) / 2,
+  y: (a.y + b.y) / 2,
+});
+
+const smoothstep = (value: number): number => {
+  const t = clamp(value, 0, 1);
+
+  return t * t * (3 - 2 * t);
+};

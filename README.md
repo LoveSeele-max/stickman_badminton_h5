@@ -38,6 +38,10 @@ Combo direction is sampled when `S` is pressed. Hit inputs are queued by the
 simulation step, so high refresh displays and late recovery presses do not eat
 the next swing command.
 
+Shot speed is impulse-first: racket motion, incoming shuttle speed, player
+movement, contact zone, and a small aim correction are blended instead of fully
+re-solving each hit from a fixed landing point.
+
 ## Development
 
 ```bash

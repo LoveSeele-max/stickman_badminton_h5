@@ -194,6 +194,8 @@ export class Player {
 export class Shuttlecock {
   x = 0;
   y = 0;
+  previousX = 0;
+  previousY = 0;
   vx = 0;
   vy = 0;
   state: ShuttleState = 'attached';
@@ -201,9 +203,14 @@ export class Shuttlecock {
   attachedTo: Side = 'left';
   netCooldown = 0;
   dragGraceTimer = 0;
+  flightTimer = 0;
 
   get position(): Vec2 {
     return { x: this.x, y: this.y };
+  }
+
+  get previousPosition(): Vec2 {
+    return { x: this.previousX, y: this.previousY };
   }
 
   attachTo(player: Player): void {
@@ -212,14 +219,19 @@ export class Shuttlecock {
     this.lastTouchedBy = player.side;
     this.x = player.x + sideDirection(player.side) * 74;
     this.y = player.y - 124;
+    this.previousX = this.x;
+    this.previousY = this.y;
     this.vx = 0;
     this.vy = 0;
     this.dragGraceTimer = 0;
+    this.flightTimer = 0;
   }
 
   updateAttached(player: Player): void {
     this.x = player.x + sideDirection(player.side) * 74;
     this.y = player.y - 124 + Math.sin(performance.now() / 210) * 2;
+    this.previousX = this.x;
+    this.previousY = this.y;
   }
 
   clampSpeed(): void {

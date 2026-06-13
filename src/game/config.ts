@@ -38,10 +38,15 @@ export const racketConfig = {
 export const shuttleConfig = {
   radius: 15,
   gravity: 1180,
-  linearDrag: 0.32,
-  quadraticDrag: 0.00042,
-  postHitDragGrace: 0.12,
+  horizontalLinearDrag: 0.36,
+  horizontalQuadraticDrag: 0.0005,
+  verticalLinearDrag: 0.18,
+  verticalQuadraticDrag: 0.00024,
+  postHitDragGrace: 0.34,
   initialDragScale: 0.22,
+  lateHorizontalDragScale: 1.28,
+  descentDragScale: 1.16,
+  maxFallSpeed: 900,
   maxSpeed: 2100,
 };
 
