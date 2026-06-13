@@ -1,4 +1,5 @@
-import { aiConfig, racketConfig, shuttleConfig, worldConfig } from './config';
+import { aiConfig, racketConfig, worldConfig } from './config';
+import { stepFlightState, type FlightState } from './flight';
 import { clamp, sideDirection } from './math';
 import type { Player, Shuttlecock } from './entities';
 import type { PlayerIntent, Side } from './types';
@@ -113,94 +114,35 @@ const predictTarget = (
     };
   }
 
-  let x = shuttle.x;
-  let y = shuttle.y;
-  let vx = shuttle.vx;
-  let vy = shuttle.vy;
-  let dragGraceTimer = shuttle.dragGraceTimer;
-  let flightTimer = shuttle.flightTimer;
-  const flightProfile = shuttle.flightProfile;
+  let state: FlightState = {
+    dragGraceTimer: shuttle.dragGraceTimer,
+    flightProfile: shuttle.flightProfile,
+    flightTimer: shuttle.flightTimer,
+    vx: shuttle.vx,
+    vy: shuttle.vy,
+    x: shuttle.x,
+    y: shuttle.y,
+  };
   let bestX = side === 'left' ? 360 : 1240;
   let bestY = worldConfig.groundY;
   let sawOwnSide = false;
   const step = 1 / 90;
 
   for (let i = 0; i < 330; i += 1) {
-    const graceDuration =
-      flightProfile === 'serve'
-        ? shuttleConfig.serveDragGrace
-        : shuttleConfig.postHitDragGrace;
-    const lateHorizontalScale =
-      flightProfile === 'serve'
-        ? shuttleConfig.serveLateHorizontalDragScale
-        : shuttleConfig.lateHorizontalDragScale;
-    const lateStart = flightProfile === 'serve' ? 0.5 : 0.24;
-    const lateDuration = flightProfile === 'serve' ? 0.82 : 0.48;
-    const dragProgress = clamp(1 - dragGraceTimer / Math.max(graceDuration, 0.001), 0, 1);
-    const smoothProgress = smoothstep(dragProgress);
-    const lateProgress = smoothstep(clamp((flightTimer - lateStart) / lateDuration, 0, 1));
-    const startDragScale = lerp(
-      shuttleConfig.initialDragScale,
-      1,
-      smoothProgress,
-    );
-    const horizontalDragScale = lerp(
-      startDragScale,
-      lateHorizontalScale,
-      lateProgress,
-    );
-    const verticalDragScale =
-      vy > 0
-        ? lerp(startDragScale, shuttleConfig.descentDragScale, lateProgress)
-        : startDragScale;
-    const horizontalDrag =
-      1 -
-      Math.min(
-        0.82,
-        (shuttleConfig.horizontalLinearDrag +
-          shuttleConfig.horizontalQuadraticDrag * Math.abs(vx)) *
-          horizontalDragScale *
-          step,
-      );
-    const verticalDrag =
-      1 -
-      Math.min(
-        0.72,
-        (shuttleConfig.verticalLinearDrag +
-          shuttleConfig.verticalQuadraticDrag * Math.abs(vy)) *
-          verticalDragScale *
-          step,
-      );
-    vx *= horizontalDrag;
-    vy = Math.min(
-      vy * verticalDrag + shuttleConfig.gravity * step,
-      shuttleConfig.maxFallSpeed,
-    );
-    const clampedSpeed = Math.hypot(vx, vy);
+    state = stepFlightState(state, step);
 
-    if (clampedSpeed > shuttleConfig.maxSpeed) {
-      const scale = shuttleConfig.maxSpeed / clampedSpeed;
-      vx *= scale;
-      vy *= scale;
-    }
-
-    x += vx * step;
-    y += vy * step;
-    dragGraceTimer = Math.max(0, dragGraceTimer - step);
-    flightTimer += step;
-
-    if (isOnSide(x, side)) {
+    if (isOnSide(state.x, side)) {
       sawOwnSide = true;
-      bestX = x;
-      bestY = y;
+      bestX = state.x;
+      bestY = state.y;
 
-      if (y > worldConfig.groundY - 245) {
+      if (state.y > worldConfig.groundY - 245) {
         break;
       }
     }
 
-    if (y >= worldConfig.groundY) {
-      bestX = x;
+    if (state.y >= worldConfig.groundY) {
+      bestX = state.x;
       bestY = worldConfig.groundY;
       break;
     }
@@ -221,12 +163,3 @@ const predictTarget = (
 
 const isOnSide = (x: number, side: Side): boolean =>
   side === 'left' ? x < worldConfig.netX : x > worldConfig.netX;
-
-const lerp = (from: number, to: number, t: number): number =>
-  from + (to - from) * t;
-
-const smoothstep = (value: number): number => {
-  const t = clamp(value, 0, 1);
-
-  return t * t * (3 - 2 * t);
-};

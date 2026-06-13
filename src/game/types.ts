@@ -6,7 +6,7 @@ export type GamePhase = 'menu' | 'playing' | 'paused' | 'point' | 'matchEnd';
 
 export type ShuttleState = 'attached' | 'flying' | 'grounded' | 'out';
 
-export type ShuttleFlightProfile = 'rally' | 'serve';
+export type ShuttleFlightProfile = 'rally-arc' | 'rally-fast' | 'serve';
 
 export type SwingType = 'hit';
 

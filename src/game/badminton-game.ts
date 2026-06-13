@@ -6,6 +6,11 @@ import {
   shuttleConfig,
   worldConfig,
 } from './config';
+import {
+  getFlightDragGrace,
+  stepFlightState,
+  type FlightState,
+} from './flight';
 import { Player, Shuttlecock } from './entities';
 import {
   clamp,
@@ -43,16 +48,6 @@ interface HitIntentLock {
   move: number;
 }
 
-interface FlightState {
-  dragGraceTimer: number;
-  flightProfile: ShuttleFlightProfile;
-  flightTimer: number;
-  vx: number;
-  vy: number;
-  x: number;
-  y: number;
-}
-
 interface ServePrediction {
   flightTime: number;
   landingX: number;
@@ -60,13 +55,22 @@ interface ServePrediction {
   valid: boolean;
 }
 
+interface FlightLandingPrediction {
+  flightTime: number;
+  landingX: number;
+}
+
 interface DebugMetrics {
   flightLandingTime: number;
   flightLandingX: number;
   flightNetTime: number;
   inputToActive: number;
+  landingError: number;
+  launchAngle: number;
   launchSpeed: number;
+  netAngle: number;
   netClearance: number;
+  predictedLandingX: number;
   quality: number;
   shot: string;
 }
@@ -104,8 +108,12 @@ export class BadmintonGame {
     flightLandingX: -1,
     flightNetTime: -1,
     inputToActive: 0,
+    landingError: 0,
+    launchAngle: 0,
     launchSpeed: 0,
+    netAngle: 0,
     netClearance: 0,
+    predictedLandingX: -1,
     quality: 0,
     shot: '',
   };
@@ -495,7 +503,7 @@ export class BadmintonGame {
     this.shuttle.previousY = this.shuttle.y;
     this.shuttle.vx = serve.velocity.x;
     this.shuttle.vy = serve.velocity.y;
-    this.shuttle.dragGraceTimer = shuttleConfig.serveDragGrace;
+    this.shuttle.dragGraceTimer = getFlightDragGrace('serve');
     this.shuttle.flightTimer = 0;
     this.shuttle.flightProfile = 'serve';
     this.serveDebug = {
@@ -505,7 +513,12 @@ export class BadmintonGame {
       targetX,
       valid: serve.prediction.valid,
     };
-    this.startFlightDebug('serve', 1, Math.hypot(this.shuttle.vx, this.shuttle.vy));
+    this.startFlightDebug(
+      'serve',
+      1,
+      { x: this.shuttle.vx, y: this.shuttle.vy },
+      serve.prediction.landingX,
+    );
     this.rallyHits = 0;
     this.message = '';
   }
@@ -577,7 +590,7 @@ export class BadmintonGame {
     const step = 1 / 120;
     const netTop = worldConfig.groundY - worldConfig.netHeight;
     let state: FlightState = {
-      dragGraceTimer: shuttleConfig.serveDragGrace,
+      dragGraceTimer: getFlightDragGrace('serve'),
       flightProfile: 'serve',
       flightTimer: 0,
       vx: velocity.x,
@@ -590,7 +603,7 @@ export class BadmintonGame {
 
     for (let i = 0; i < 260; i += 1) {
       const previous = { x: state.x, y: state.y };
-      state = this.stepFlightState(state, step);
+      state = stepFlightState(state, step);
 
       if (
         !crossedNet &&
@@ -625,82 +638,6 @@ export class BadmintonGame {
     };
   }
 
-  private stepFlightState(state: FlightState, dt: number): FlightState {
-    const graceDuration =
-      state.flightProfile === 'serve'
-        ? shuttleConfig.serveDragGrace
-        : shuttleConfig.postHitDragGrace;
-    const lateHorizontalScale =
-      state.flightProfile === 'serve'
-        ? shuttleConfig.serveLateHorizontalDragScale
-        : shuttleConfig.lateHorizontalDragScale;
-    const lateStart = state.flightProfile === 'serve' ? 0.5 : 0.24;
-    const lateDuration = state.flightProfile === 'serve' ? 0.82 : 0.48;
-    const dragProgress = clamp(
-      1 - state.dragGraceTimer / Math.max(graceDuration, 0.001),
-      0,
-      1,
-    );
-    const smoothProgress = smoothstep(dragProgress);
-    const lateProgress = smoothstep(
-      clamp((state.flightTimer - lateStart) / lateDuration, 0, 1),
-    );
-    const startDragScale = lerp(
-      shuttleConfig.initialDragScale,
-      1,
-      smoothProgress,
-    );
-    const horizontalDragScale = lerp(
-      startDragScale,
-      lateHorizontalScale,
-      lateProgress,
-    );
-    const verticalDragScale =
-      state.vy > 0
-        ? lerp(startDragScale, shuttleConfig.descentDragScale, lateProgress)
-        : startDragScale;
-    const horizontalDrag =
-      1 -
-      Math.min(
-        0.84,
-        (shuttleConfig.horizontalLinearDrag +
-          shuttleConfig.horizontalQuadraticDrag * Math.abs(state.vx)) *
-          horizontalDragScale *
-          dt,
-      );
-    const verticalDrag =
-      1 -
-      Math.min(
-        0.72,
-        (shuttleConfig.verticalLinearDrag +
-          shuttleConfig.verticalQuadraticDrag * Math.abs(state.vy)) *
-          verticalDragScale *
-          dt,
-      );
-    let vx = state.vx * horizontalDrag;
-    let vy = Math.min(
-      state.vy * verticalDrag + shuttleConfig.gravity * dt,
-      shuttleConfig.maxFallSpeed,
-    );
-    const speed = Math.hypot(vx, vy);
-
-    if (speed > shuttleConfig.maxSpeed) {
-      const scale = shuttleConfig.maxSpeed / speed;
-      vx *= scale;
-      vy *= scale;
-    }
-
-    return {
-      ...state,
-      dragGraceTimer: Math.max(0, state.dragGraceTimer - dt),
-      flightTimer: state.flightTimer + dt,
-      vx,
-      vy,
-      x: state.x + vx * dt,
-      y: state.y + vy * dt,
-    };
-  }
-
   private updateShuttle(dt: number): void {
     if (this.shuttle.state !== 'flying') {
       return;
@@ -710,11 +647,13 @@ export class BadmintonGame {
     this.shuttle.previousY = this.shuttle.y;
     const previous = {
       flightTimer: this.shuttle.flightTimer,
+      vx: this.shuttle.vx,
+      vy: this.shuttle.vy,
       x: this.shuttle.x,
       y: this.shuttle.y,
     };
 
-    const next = this.stepFlightState(
+    const next = stepFlightState(
       {
         dragGraceTimer: this.shuttle.dragGraceTimer,
         flightProfile: this.shuttle.flightProfile,
@@ -737,17 +676,28 @@ export class BadmintonGame {
     this.updateFlightDebug(previous);
   }
 
-  private startFlightDebug(shot: string, quality: number, launchSpeed: number): void {
+  private startFlightDebug(
+    shot: string,
+    quality: number,
+    velocity: Vec2,
+    predictedLandingX: number,
+  ): void {
     this.debugMetrics.flightLandingTime = -1;
     this.debugMetrics.flightLandingX = -1;
     this.debugMetrics.flightNetTime = -1;
-    this.debugMetrics.launchSpeed = launchSpeed;
+    this.debugMetrics.landingError = 0;
+    this.debugMetrics.launchAngle = velocityAngleDegrees(velocity);
+    this.debugMetrics.launchSpeed = Math.hypot(velocity.x, velocity.y);
+    this.debugMetrics.netAngle = 0;
     this.debugMetrics.netClearance = 0;
+    this.debugMetrics.predictedLandingX = predictedLandingX;
     this.debugMetrics.quality = quality;
     this.debugMetrics.shot = shot;
   }
 
-  private updateFlightDebug(previous: { flightTimer: number; x: number; y: number }): void {
+  private updateFlightDebug(
+    previous: { flightTimer: number; vx: number; vy: number; x: number; y: number },
+  ): void {
     if (
       this.debugMetrics.flightNetTime >= 0 ||
       (previous.x - worldConfig.netX) * (this.shuttle.x - worldConfig.netX) > 0
@@ -762,8 +712,11 @@ export class BadmintonGame {
       1,
     );
     const netY = lerp(previous.y, this.shuttle.y, t);
+    const netVx = lerp(previous.vx, this.shuttle.vx, t);
+    const netVy = lerp(previous.vy, this.shuttle.vy, t);
     this.debugMetrics.flightNetTime = lerp(previous.flightTimer, this.shuttle.flightTimer, t);
     this.debugMetrics.netClearance = worldConfig.groundY - worldConfig.netHeight - netY;
+    this.debugMetrics.netAngle = velocityAngleDegrees({ x: netVx, y: netVy });
   }
 
   private resolveRacketHits(
@@ -872,6 +825,8 @@ export class BadmintonGame {
       dt,
     );
     const incomingVelocity = { x: this.shuttle.vx, y: this.shuttle.vy };
+    const flightProfile = this.getShotFlightProfile(shot);
+    const launchPosition = this.getHitLaunchPosition(player, contact);
     const velocity = this.getShotVelocity(
       player,
       shot,
@@ -880,6 +835,13 @@ export class BadmintonGame {
       lockedIntent,
       racketVelocity,
       incomingVelocity,
+      launchPosition,
+      flightProfile,
+    );
+    const landingPrediction = this.predictFlightLanding(
+      launchPosition,
+      velocity,
+      flightProfile,
     );
 
     player.swingHasHit = true;
@@ -887,19 +849,15 @@ export class BadmintonGame {
     this.shuttle.lastTouchedBy = player.side;
     this.shuttle.vx = velocity.x;
     this.shuttle.vy = velocity.y;
-    this.shuttle.dragGraceTimer = shuttleConfig.postHitDragGrace;
+    this.shuttle.dragGraceTimer = getFlightDragGrace(flightProfile);
     this.shuttle.flightTimer = 0;
-    this.shuttle.flightProfile = 'rally';
-    this.shuttle.x = contact.point.x + sideDirection(player.side) * 18;
-    this.shuttle.y = clamp(
-      contact.point.y,
-      player.y - racketConfig.assistHeightMax,
-      player.y - racketConfig.assistHeightMin,
-    );
+    this.shuttle.flightProfile = flightProfile;
+    this.shuttle.x = launchPosition.x;
+    this.shuttle.y = launchPosition.y;
     this.shuttle.previousX = this.shuttle.x;
     this.shuttle.previousY = this.shuttle.y;
     this.rallyHits += 1;
-    this.startFlightDebug(shot, quality, Math.hypot(velocity.x, velocity.y));
+    this.startFlightDebug(shot, quality, velocity, landingPrediction.landingX);
     this.lastHitLabel = `${contact.label} ${shot}`;
     this.lastHitTimer = 0.72;
     this.impactX = this.shuttle.x;
@@ -1061,6 +1019,21 @@ export class BadmintonGame {
     return 'neutral';
   }
 
+  private getShotFlightProfile(shot: ShotKind): ShuttleFlightProfile {
+    return shot === 'drive' || shot === 'smash' ? 'rally-fast' : 'rally-arc';
+  }
+
+  private getHitLaunchPosition(player: Player, contact: HitContact): Vec2 {
+    return {
+      x: contact.point.x + sideDirection(player.side) * 18,
+      y: clamp(
+        contact.point.y,
+        player.y - racketConfig.assistHeightMax,
+        player.y - racketConfig.assistHeightMin,
+      ),
+    };
+  }
+
   private getShotVelocity(
     player: Player,
     shot: ShotKind,
@@ -1069,6 +1042,8 @@ export class BadmintonGame {
     intent: HitIntentLock,
     racketVelocity: Vec2,
     incomingVelocity: Vec2,
+    launchPosition: Vec2,
+    flightProfile: ShuttleFlightProfile,
   ): Vec2 {
     const direction = sideDirection(player.side);
     const forwardInput = direction * intent.move;
@@ -1089,7 +1064,7 @@ export class BadmintonGame {
     const cleanHit = clamp(quality * 0.72 + sweetness * 0.28, 0, 1);
     const profileByShot = {
       clear: {
-        aim: 0.24,
+        aim: 0.28,
         angle: -0.58,
         baseSpeed: 1260,
         maxSpeed: 1600,
@@ -1097,7 +1072,7 @@ export class BadmintonGame {
         minSpeed: 1020,
       },
       drive: {
-        aim: 0.17,
+        aim: 0.14,
         angle: -0.06,
         baseSpeed: 1510,
         maxSpeed: 1880,
@@ -1105,7 +1080,7 @@ export class BadmintonGame {
         minSpeed: 1240,
       },
       lift: {
-        aim: 0.22,
+        aim: 0.27,
         angle: -0.88,
         baseSpeed: 1120,
         maxSpeed: 1450,
@@ -1121,7 +1096,7 @@ export class BadmintonGame {
         minSpeed: 1460,
       },
       neutral: {
-        aim: 0.2,
+        aim: 0.24,
         angle: -0.24,
         baseSpeed: 1180,
         maxSpeed: 1500,
@@ -1193,53 +1168,173 @@ export class BadmintonGame {
         borrowedSpeed) *
       intentPower *
       slowTouchScale;
-    const velocity = {
+    let velocity = {
       x: direction * Math.cos(launchAngle) * speed,
       y: Math.sin(launchAngle) * speed,
     };
-    const racketBlend = 0.13 + cleanHit * 0.08;
-    velocity.x += racketVelocity.x * racketBlend + player.vx * 0.22;
+    const racketBlend = 0.045 + cleanHit * 0.045;
+    velocity.x += racketVelocity.x * racketBlend + player.vx * 0.18;
     velocity.y +=
-      racketVelocity.y * (shot === 'lift' || shot === 'clear' ? 0.045 : 0.095) +
+      racketVelocity.y * (shot === 'lift' || shot === 'clear' ? 0.025 : 0.055) +
       player.vy * 0.04 -
       incomingVelocity.y * (0.04 + cleanHit * 0.04);
     velocity.x += -incomingVelocity.x * (0.08 + cleanHit * 0.08);
 
-    const aimVelocity = {
-      x: (target.x - this.shuttle.x) / target.t,
-      y:
-        (target.y -
-          this.shuttle.y -
-          0.5 * shuttleConfig.gravity * target.t * target.t) /
-        target.t,
-    };
     const aimStrength =
       profile.aim * lerp(0.55, 1, cleanHit) * clamp(contact.distanceScale, 0.78, 1.16);
-    velocity.x +=
-      clamp(aimVelocity.x - velocity.x, -320, 320) * aimStrength;
-    velocity.y +=
-      clamp(aimVelocity.y - velocity.y, -260, 260) * aimStrength;
+    velocity = this.applySimulatedAimCorrection(
+      velocity,
+      launchPosition,
+      target,
+      flightProfile,
+      aimStrength,
+    );
 
     const edgeFlutter =
       contact.zone === 'edge'
         ? Math.sin(this.rallyHits * 1.91 + contact.t * 6) * 42
         : 0;
     velocity.y += edgeFlutter * contact.arcScale;
-    const clamped = this.clampShotVelocity(
-      velocity,
-      profile.minSpeed * lerp(0.92, 1.04, cleanHit),
-      profile.maxSpeed * lerp(0.96, 1.06, cleanHit),
-    );
-    const forwardSpeed = direction * clamped.x;
     const minForward =
       profile.minForward *
       (shot === 'drive' || shot === 'smash' ? lerp(0.9, 1.04, cleanHit) : 1);
 
-    if (forwardSpeed < minForward) {
-      clamped.x += direction * (minForward - forwardSpeed) * 0.55;
+    return this.finalizeShotVelocity(
+      velocity,
+      direction,
+      minForward,
+      profile.minSpeed * lerp(0.92, 1.04, cleanHit),
+      profile.maxSpeed * lerp(0.96, 1.06, cleanHit),
+    );
+  }
+
+  private applySimulatedAimCorrection(
+    velocity: Vec2,
+    start: Vec2,
+    target: { x: number; y: number; t: number },
+    flightProfile: ShuttleFlightProfile,
+    aimStrength: number,
+  ): Vec2 {
+    let corrected = { ...velocity };
+    const horizontalScale = flightProfile === 'rally-fast' ? 0.72 : 0.9;
+    const verticalScale = flightProfile === 'rally-fast' ? 0.48 : 0.78;
+
+    for (let i = 0; i < 2; i += 1) {
+      const prediction = this.predictFlightPosition(
+        start,
+        corrected,
+        flightProfile,
+        target.t,
+      );
+      const iterationScale = i === 0 ? 1 : 0.55;
+
+      corrected = {
+        x:
+          corrected.x +
+          clamp((target.x - prediction.x) / target.t, -380, 380) *
+            aimStrength *
+            horizontalScale *
+            iterationScale,
+        y:
+          corrected.y +
+          clamp((target.y - prediction.y) / target.t, -320, 320) *
+            aimStrength *
+            verticalScale *
+            iterationScale,
+      };
     }
 
-    return clamped;
+    return corrected;
+  }
+
+  private predictFlightPosition(
+    start: Vec2,
+    velocity: Vec2,
+    flightProfile: ShuttleFlightProfile,
+    duration: number,
+  ): FlightState {
+    let state: FlightState = {
+      dragGraceTimer: getFlightDragGrace(flightProfile),
+      flightProfile,
+      flightTimer: 0,
+      vx: velocity.x,
+      vy: velocity.y,
+      x: start.x,
+      y: start.y,
+    };
+    let remaining = duration;
+    const step = 1 / 120;
+
+    while (remaining > 0) {
+      const dt = Math.min(step, remaining);
+      state = stepFlightState(state, dt);
+      remaining -= dt;
+
+      if (state.y + shuttleConfig.radius >= worldConfig.groundY) {
+        return {
+          ...state,
+          y: worldConfig.groundY - shuttleConfig.radius,
+        };
+      }
+    }
+
+    return state;
+  }
+
+  private predictFlightLanding(
+    start: Vec2,
+    velocity: Vec2,
+    flightProfile: ShuttleFlightProfile,
+  ): FlightLandingPrediction {
+    let state: FlightState = {
+      dragGraceTimer: getFlightDragGrace(flightProfile),
+      flightProfile,
+      flightTimer: 0,
+      vx: velocity.x,
+      vy: velocity.y,
+      x: start.x,
+      y: start.y,
+    };
+    const step = 1 / 120;
+
+    for (let i = 0; i < 360; i += 1) {
+      state = stepFlightState(state, step);
+
+      if (
+        state.y + shuttleConfig.radius >= worldConfig.groundY ||
+        state.x < -64 ||
+        state.x > worldConfig.width + 64
+      ) {
+        return {
+          flightTime: state.flightTimer,
+          landingX: state.x,
+        };
+      }
+    }
+
+    return {
+      flightTime: state.flightTimer,
+      landingX: state.x,
+    };
+  }
+
+  private finalizeShotVelocity(
+    velocity: Vec2,
+    direction: number,
+    minForward: number,
+    minSpeed: number,
+    maxSpeed: number,
+  ): Vec2 {
+    const forwardSpeed = direction * velocity.x;
+    const forwardCorrected =
+      forwardSpeed < minForward
+        ? {
+            ...velocity,
+            x: velocity.x + direction * (minForward - forwardSpeed),
+          }
+        : velocity;
+
+    return this.clampShotVelocity(forwardCorrected, minSpeed, maxSpeed);
   }
 
   private getRacketContactVelocity(
@@ -1345,6 +1440,10 @@ export class BadmintonGame {
       this.shuttle.state = 'out';
       this.debugMetrics.flightLandingTime = this.shuttle.flightTimer;
       this.debugMetrics.flightLandingX = this.shuttle.x;
+      this.debugMetrics.landingError =
+        this.debugMetrics.predictedLandingX >= 0
+          ? this.shuttle.x - this.debugMetrics.predictedLandingX
+          : 0;
       this.awardPoint(oppositeSide(this.shuttle.lastTouchedBy), 'Out');
       return;
     }
@@ -1353,6 +1452,10 @@ export class BadmintonGame {
       this.shuttle.state = 'grounded';
       this.debugMetrics.flightLandingTime = this.shuttle.flightTimer;
       this.debugMetrics.flightLandingX = this.shuttle.x;
+      this.debugMetrics.landingError =
+        this.debugMetrics.predictedLandingX >= 0
+          ? this.shuttle.x - this.debugMetrics.predictedLandingX
+          : 0;
       const scorer: Side = this.shuttle.x < worldConfig.netX ? 'right' : 'left';
       this.awardPoint(scorer, 'Ground');
     }
@@ -1426,8 +1529,12 @@ export class BadmintonGame {
       flightLandingX: -1,
       flightNetTime: -1,
       inputToActive: 0,
+      landingError: 0,
+      launchAngle: 0,
       launchSpeed: 0,
+      netAngle: 0,
       netClearance: 0,
+      predictedLandingX: -1,
       quality: 0,
       shot: '',
     };
@@ -1818,7 +1925,7 @@ export class BadmintonGame {
     }
 
     ctx.fillStyle = 'rgba(15,23,42,0.72)';
-    ctx.fillRect(24, 24, 470, this.serveDebug ? 406 : 320);
+    ctx.fillRect(24, 24, 500, this.serveDebug ? 492 : 378);
     ctx.fillStyle = '#ffffff';
     ctx.font = '500 20px Inter, sans-serif';
     ctx.textAlign = 'left';
@@ -1848,22 +1955,36 @@ export class BadmintonGame {
       287,
     );
     ctx.fillText(`Net clearance: ${Math.round(this.debugMetrics.netClearance)} px`, 44, 316);
+    ctx.fillText(
+      `Pred/err: ${
+        this.debugMetrics.predictedLandingX >= 0
+          ? Math.round(this.debugMetrics.predictedLandingX)
+          : '--'
+      } / ${Math.round(this.debugMetrics.landingError)}`,
+      44,
+      345,
+    );
+    ctx.fillText(
+      `Angle: ${this.debugMetrics.launchAngle.toFixed(1)} / ${this.debugMetrics.netAngle.toFixed(1)}`,
+      44,
+      374,
+    );
 
     if (this.serveDebug) {
       ctx.fillText(
         `Serve land/target: ${Math.round(this.serveDebug.landingX)} / ${Math.round(this.serveDebug.targetX)}`,
         44,
-        345,
+        403,
       );
       ctx.fillText(
         `Net clearance: ${Math.round(this.serveDebug.netClearance)} px`,
         44,
-        374,
+        432,
       );
       ctx.fillText(
         `Serve time: ${this.serveDebug.flightTime.toFixed(2)}s ${this.serveDebug.valid ? 'OK' : 'CHECK'}`,
         44,
-        403,
+        461,
       );
     }
     ctx.restore();
@@ -1898,11 +2019,8 @@ const midpoint = (a: Vec2, b: Vec2): Vec2 => ({
   y: (a.y + b.y) / 2,
 });
 
-const smoothstep = (value: number): number => {
-  const t = clamp(value, 0, 1);
-
-  return t * t * (3 - 2 * t);
-};
+const velocityAngleDegrees = (velocity: Vec2): number =>
+  (Math.atan2(velocity.y, Math.max(Math.abs(velocity.x), 0.001)) * 180) / Math.PI;
 
 const approach = (value: number, target: number, maxDelta: number): number => {
   if (value < target) {

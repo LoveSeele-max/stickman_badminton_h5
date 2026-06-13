@@ -213,7 +213,7 @@ export class Shuttlecock {
   netCooldown = 0;
   dragGraceTimer = 0;
   flightTimer = 0;
-  flightProfile: ShuttleFlightProfile = 'rally';
+  flightProfile: ShuttleFlightProfile = 'rally-arc';
 
   get position(): Vec2 {
     return { x: this.x, y: this.y };
@@ -235,7 +235,7 @@ export class Shuttlecock {
     this.vy = 0;
     this.dragGraceTimer = 0;
     this.flightTimer = 0;
-    this.flightProfile = 'rally';
+    this.flightProfile = 'rally-arc';
   }
 
   updateAttached(player: Player): void {
