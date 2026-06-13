@@ -33,6 +33,8 @@ import type {
 } from './types';
 
 type FaceZone = 'handle' | 'center' | 'sweet' | 'tip' | 'edge';
+type ServeFallbackReason = 'none' | 'invalid' | 'net' | 'receiver' | 'out';
+type ServeMode = 'impulse' | 'fallback';
 
 interface HitContact {
   arcScale: number;
@@ -124,9 +126,12 @@ export class BadmintonGame {
   };
   private serveDebug:
     | {
+        fallbackReason: ServeFallbackReason;
         fallbackUsed: boolean;
         flightTime: number;
         landingX: number;
+        landingError: number;
+        mode: ServeMode;
         netClearance: number;
         targetX: number;
         valid: boolean;
@@ -153,15 +158,16 @@ export class BadmintonGame {
       this.debug = !this.debug;
     }
 
+    const hitStopActive = this.phase === 'playing' && this.hitStopTimer > 0;
+    const simulationDt = hitStopActive ? dt * 0.16 : dt;
+    const visualDt = this.phase === 'playing' ? simulationDt : dt;
+    this.hitStopTimer = Math.max(0, this.hitStopTimer - dt);
     this.lastHitTimer = Math.max(0, this.lastHitTimer - dt);
-    this.impactTimer = Math.max(0, this.impactTimer - dt);
-    this.trailBoostTimer = Math.max(0, this.trailBoostTimer - dt);
+    this.impactTimer = Math.max(0, this.impactTimer - visualDt);
+    this.trailBoostTimer = Math.max(0, this.trailBoostTimer - visualDt);
     if (this.trailBoostTimer <= 0) {
       this.trailBoostPower = 0;
     }
-    const hitStopActive = this.phase === 'playing' && this.hitStopTimer > 0;
-    this.hitStopTimer = Math.max(0, this.hitStopTimer - dt);
-    const simulationDt = hitStopActive ? dt * 0.16 : dt;
 
     switch (this.phase) {
       case 'menu':
@@ -537,9 +543,12 @@ export class BadmintonGame {
     this.shuttle.flightTimer = 0;
     this.shuttle.flightProfile = 'serve';
     this.serveDebug = {
+      fallbackReason: serve.fallbackReason,
       fallbackUsed: serve.fallbackUsed,
       flightTime: serve.prediction.flightTime,
       landingX: serve.prediction.landingX,
+      landingError: serve.prediction.landingX - targetX,
+      mode: serve.mode,
       netClearance: serve.prediction.netClearance,
       targetX,
       valid: serve.prediction.valid,
@@ -581,9 +590,16 @@ export class BadmintonGame {
     direction: number,
     targetX: number,
     dragGraceTimer: number,
-  ): { fallbackUsed: boolean; velocity: Vec2; prediction: ServePrediction } {
+  ): {
+    fallbackReason: ServeFallbackReason;
+    fallbackUsed: boolean;
+    mode: ServeMode;
+    velocity: Vec2;
+    prediction: ServePrediction;
+  } {
     const baseSpeed = 1280;
     const baseAngle = -0.74;
+    let fallbackReason: ServeFallbackReason = 'none';
     let fallbackUsed = false;
     let velocity = {
       x: direction * Math.cos(baseAngle) * baseSpeed,
@@ -618,21 +634,28 @@ export class BadmintonGame {
     }
 
     let prediction = this.predictServe(start, velocity, dragGraceTimer);
+    fallbackReason = this.getServeFallbackReason(prediction, direction);
 
-    if (this.shouldFallbackServe(prediction, direction)) {
+    if (fallbackReason !== 'none') {
       const fallback = this.solveServeVelocity(start, direction, targetX, dragGraceTimer);
       velocity = fallback.velocity;
       prediction = fallback.prediction;
       fallbackUsed = true;
     }
 
-    return { fallbackUsed, velocity, prediction };
+    return {
+      fallbackReason,
+      fallbackUsed,
+      mode: fallbackUsed ? 'fallback' : 'impulse',
+      velocity,
+      prediction,
+    };
   }
 
-  private shouldFallbackServe(
+  private getServeFallbackReason(
     prediction: ServePrediction,
     direction: number,
-  ): boolean {
+  ): ServeFallbackReason {
     const crossedToReceiver =
       direction === 1
         ? prediction.landingX > worldConfig.netX + 120
@@ -641,12 +664,23 @@ export class BadmintonGame {
       prediction.landingX > worldConfig.sidePadding &&
       prediction.landingX < worldConfig.width - worldConfig.sidePadding;
 
-    return (
-      !prediction.valid ||
-      prediction.netClearance < 62 ||
-      !crossedToReceiver ||
-      !landsInWorld
-    );
+    if (prediction.netClearance > -900 && prediction.netClearance < 62) {
+      return 'net';
+    }
+
+    if (!crossedToReceiver) {
+      return 'receiver';
+    }
+
+    if (!landsInWorld) {
+      return 'out';
+    }
+
+    if (!prediction.valid) {
+      return 'invalid';
+    }
+
+    return 'none';
   }
 
   private solveServeVelocity(
@@ -972,12 +1006,14 @@ export class BadmintonGame {
       flightProfile,
       dragGraceTimer,
     );
-    const landingPrediction = this.predictFlightLanding(
-      launchPosition,
-      velocity,
-      flightProfile,
-      dragGraceTimer,
-    );
+    const predictedLandingX = this.debug
+      ? this.predictFlightLanding(
+          launchPosition,
+          velocity,
+          flightProfile,
+          dragGraceTimer,
+        ).landingX
+      : -1;
 
     player.swingHasHit = true;
     player.hitIntentTimer = 0;
@@ -992,7 +1028,7 @@ export class BadmintonGame {
     this.shuttle.previousX = this.shuttle.x;
     this.shuttle.previousY = this.shuttle.y;
     this.rallyHits += 1;
-    this.startFlightDebug(shot, quality, velocity, landingPrediction.landingX);
+    this.startFlightDebug(shot, quality, velocity, predictedLandingX);
     this.lastHitLabel = `${contact.label} ${shot}`;
     this.lastHitTimer = 0.72;
     this.impactX = this.shuttle.x;
@@ -1266,7 +1302,7 @@ export class BadmintonGame {
         minSpeed: 1020,
       },
       drive: {
-        aim: 0.1,
+        aim: 0.085,
         angle: -0.06,
         baseSpeed: 1510,
         maxSpeed: 1880,
@@ -1282,7 +1318,7 @@ export class BadmintonGame {
         minSpeed: 900,
       },
       smash: {
-        aim: 0.085,
+        aim: 0.07,
         angle: 0.46,
         baseSpeed: 1780,
         maxSpeed: 2100,
@@ -1428,6 +1464,7 @@ export class BadmintonGame {
       minForward,
       profile.minSpeed * lerp(0.92, 1.04, cleanHit),
       maxSpeed,
+      isFastShot && !strictContact,
     );
   }
 
@@ -1452,12 +1489,12 @@ export class BadmintonGame {
           ? 0.9
           : 1;
     const horizontalScale = isFastShot
-      ? (shot === 'drive' ? 0.48 : 0.42) * fastContactScale
+      ? (shot === 'drive' ? 0.42 : 0.36) * fastContactScale
       : flightProfile === 'rally-fast'
         ? 0.72
         : 0.9;
     const verticalScale = isFastShot
-      ? (shot === 'drive' ? 0.2 : 0.16) * fastContactScale
+      ? (shot === 'drive' ? 0.14 : 0.08) * fastContactScale
       : flightProfile === 'rally-fast'
         ? 0.48
         : 0.78;
@@ -1491,13 +1528,13 @@ export class BadmintonGame {
     if (isFastShot) {
       const launchPreserve =
         (contact.zone === 'sweet'
-          ? 0.62
+          ? 0.72
           : contact.zone === 'center' || contact.zone === 'tip'
-            ? 0.42
+            ? 0.5
             : 0.22) * clamp(cleanHit, 0.3, 1);
       const retainedCorrection = 1 - launchPreserve * 0.62;
-      const maxHorizontalDelta = shot === 'drive' ? 78 : 68;
-      const maxVerticalDelta = shot === 'drive' ? 34 : 28;
+      const maxHorizontalDelta = shot === 'drive' ? 68 : 58;
+      const maxVerticalDelta = shot === 'drive' ? 24 : 16;
       const direction = original.x >= 0 ? 1 : -1;
       const minimumForward = direction * original.x * (contact.zone === 'sweet' ? 0.96 : 0.92);
 
@@ -1601,6 +1638,7 @@ export class BadmintonGame {
     minForward: number,
     minSpeed: number,
     maxSpeed: number,
+    preserveForward = false,
   ): Vec2 {
     const forwardSpeed = direction * velocity.x;
     const forwardCorrected =
@@ -1610,6 +1648,16 @@ export class BadmintonGame {
             x: velocity.x + direction * (minForward - forwardSpeed),
           }
         : velocity;
+
+    if (preserveForward) {
+      return this.clampForwardPreservingShotVelocity(
+        forwardCorrected,
+        minSpeed,
+        maxSpeed,
+        direction,
+        minForward,
+      );
+    }
 
     return this.clampShotVelocity(forwardCorrected, minSpeed, maxSpeed);
   }
@@ -1649,6 +1697,29 @@ export class BadmintonGame {
     }
 
     return velocity;
+  }
+
+  private clampForwardPreservingShotVelocity(
+    velocity: Vec2,
+    minSpeed: number,
+    maxSpeed: number,
+    direction: number,
+    minForward: number,
+  ): Vec2 {
+    const clamped = this.clampShotVelocity(velocity, minSpeed, maxSpeed);
+
+    if (direction * clamped.x >= minForward) {
+      return clamped;
+    }
+
+    const forward = Math.min(minForward, maxSpeed);
+    const maxY = Math.sqrt(Math.max(0, maxSpeed * maxSpeed - forward * forward));
+    const forwardPreserved = {
+      x: direction * forward,
+      y: clamp(velocity.y, -maxY, maxY),
+    };
+
+    return this.clampShotVelocity(forwardPreserved, minSpeed, maxSpeed);
   }
 
   private resolveNetCollision(): void {
@@ -2224,7 +2295,7 @@ export class BadmintonGame {
     }
 
     ctx.fillStyle = 'rgba(15,23,42,0.72)';
-    ctx.fillRect(24, 24, 500, this.serveDebug ? 521 : 378);
+    ctx.fillRect(24, 24, 500, this.serveDebug ? 579 : 378);
     ctx.fillStyle = '#ffffff';
     ctx.font = '500 20px Inter, sans-serif';
     ctx.textAlign = 'left';
@@ -2271,7 +2342,7 @@ export class BadmintonGame {
 
     if (this.serveDebug) {
       ctx.fillText(
-        `Serve land/target: ${Math.round(this.serveDebug.landingX)} / ${Math.round(this.serveDebug.targetX)}`,
+        `Serve land/target/err: ${Math.round(this.serveDebug.landingX)} / ${Math.round(this.serveDebug.targetX)} / ${Math.round(this.serveDebug.landingError)}`,
         44,
         403,
       );
@@ -2286,9 +2357,19 @@ export class BadmintonGame {
         461,
       );
       ctx.fillText(
-        `Serve fallback: ${this.serveDebug.fallbackUsed ? 'yes' : 'no'}`,
+        `Serve mode: ${this.serveDebug.mode}`,
         44,
         490,
+      );
+      ctx.fillText(
+        `Serve fallback: ${this.serveDebug.fallbackUsed ? 'yes' : 'no'}`,
+        44,
+        519,
+      );
+      ctx.fillText(
+        `Fallback reason: ${this.serveDebug.fallbackReason}`,
+        44,
+        548,
       );
     }
     ctx.restore();
