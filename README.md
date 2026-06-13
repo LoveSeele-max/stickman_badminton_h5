@@ -42,6 +42,10 @@ Shot speed is impulse-first: racket motion, incoming shuttle speed, player
 movement, contact zone, and a small aim correction are blended instead of fully
 re-solving each hit from a fixed landing point.
 
+Serves use a separate high-serve profile with a simulated target solve, safer
+net clearance, and debug readouts for expected landing, net clearance, and
+flight time.
+
 ## Development
 
 ```bash

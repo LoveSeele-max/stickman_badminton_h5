@@ -119,19 +119,26 @@ const predictTarget = (
   let vy = shuttle.vy;
   let dragGraceTimer = shuttle.dragGraceTimer;
   let flightTimer = shuttle.flightTimer;
+  const flightProfile = shuttle.flightProfile;
   let bestX = side === 'left' ? 360 : 1240;
   let bestY = worldConfig.groundY;
   let sawOwnSide = false;
   const step = 1 / 90;
 
   for (let i = 0; i < 330; i += 1) {
-    const dragProgress = clamp(
-      1 - dragGraceTimer / shuttleConfig.postHitDragGrace,
-      0,
-      1,
-    );
+    const graceDuration =
+      flightProfile === 'serve'
+        ? shuttleConfig.serveDragGrace
+        : shuttleConfig.postHitDragGrace;
+    const lateHorizontalScale =
+      flightProfile === 'serve'
+        ? shuttleConfig.serveLateHorizontalDragScale
+        : shuttleConfig.lateHorizontalDragScale;
+    const lateStart = flightProfile === 'serve' ? 0.5 : 0.24;
+    const lateDuration = flightProfile === 'serve' ? 0.82 : 0.48;
+    const dragProgress = clamp(1 - dragGraceTimer / Math.max(graceDuration, 0.001), 0, 1);
     const smoothProgress = smoothstep(dragProgress);
-    const lateProgress = smoothstep(clamp((flightTimer - 0.24) / 0.48, 0, 1));
+    const lateProgress = smoothstep(clamp((flightTimer - lateStart) / lateDuration, 0, 1));
     const startDragScale = lerp(
       shuttleConfig.initialDragScale,
       1,
@@ -139,7 +146,7 @@ const predictTarget = (
     );
     const horizontalDragScale = lerp(
       startDragScale,
-      shuttleConfig.lateHorizontalDragScale,
+      lateHorizontalScale,
       lateProgress,
     );
     const verticalDragScale =
@@ -169,6 +176,14 @@ const predictTarget = (
       vy * verticalDrag + shuttleConfig.gravity * step,
       shuttleConfig.maxFallSpeed,
     );
+    const clampedSpeed = Math.hypot(vx, vy);
+
+    if (clampedSpeed > shuttleConfig.maxSpeed) {
+      const scale = shuttleConfig.maxSpeed / clampedSpeed;
+      vx *= scale;
+      vy *= scale;
+    }
+
     x += vx * step;
     y += vy * step;
     dragGraceTimer = Math.max(0, dragGraceTimer - step);

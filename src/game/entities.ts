@@ -1,6 +1,13 @@
 import { playerConfig, racketConfig, shuttleConfig, worldConfig } from './config';
 import { clamp, sideDirection } from './math';
-import type { AiMemory, ShuttleState, Side, SwingType, Vec2 } from './types';
+import type {
+  AiMemory,
+  ShuttleFlightProfile,
+  ShuttleState,
+  Side,
+  SwingType,
+  Vec2,
+} from './types';
 
 export class Player {
   readonly side: Side;
@@ -204,6 +211,7 @@ export class Shuttlecock {
   netCooldown = 0;
   dragGraceTimer = 0;
   flightTimer = 0;
+  flightProfile: ShuttleFlightProfile = 'rally';
 
   get position(): Vec2 {
     return { x: this.x, y: this.y };
@@ -225,6 +233,7 @@ export class Shuttlecock {
     this.vy = 0;
     this.dragGraceTimer = 0;
     this.flightTimer = 0;
+    this.flightProfile = 'rally';
   }
 
   updateAttached(player: Player): void {
