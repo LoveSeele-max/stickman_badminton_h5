@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { getFlightDragGrace, stepFlightState, type FlightState } from './flight';
+import {
+  getFlightDragGrace,
+  stepFlightState,
+  stepFlightStateMutable,
+  type FlightState,
+} from './flight';
 import type { ShuttleFlightProfile } from './types';
 
 const simulate = (
@@ -38,5 +43,23 @@ describe('flight profiles', () => {
     expect(Number.isFinite(fast.x)).toBe(true);
     expect(Number.isFinite(arc.x)).toBe(true);
     expect(Math.abs(fast.vx)).toBeGreaterThan(Math.abs(arc.vx));
+  });
+
+  it('matches mutable and immutable flight stepping', () => {
+    const immutable: FlightState = {
+      dragGraceTimer: getFlightDragGrace('rally-fast'),
+      flightProfile: 'rally-fast',
+      flightTimer: 0.18,
+      vx: 1480,
+      vy: 220,
+      x: 520,
+      y: 360,
+    };
+    const mutable = { ...immutable };
+    const next = stepFlightState(immutable, 1 / 120);
+
+    stepFlightStateMutable(mutable, 1 / 120);
+
+    expect(mutable).toEqual(next);
   });
 });

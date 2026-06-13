@@ -26,6 +26,14 @@ export const getFlightDragGrace = (profile: ShuttleFlightProfile): number =>
   getFlightTuning(profile).graceDuration;
 
 export const stepFlightState = (state: FlightState, dt: number): FlightState => {
+  const next = { ...state };
+
+  stepFlightStateMutable(next, dt);
+
+  return next;
+};
+
+export const stepFlightStateMutable = (state: FlightState, dt: number): void => {
   const tuning = getFlightTuning(state.flightProfile);
   const dragProgress = clamp(
     1 - state.dragGraceTimer / Math.max(tuning.graceDuration, 0.001),
@@ -81,15 +89,12 @@ export const stepFlightState = (state: FlightState, dt: number): FlightState => 
     vy *= scale;
   }
 
-  return {
-    ...state,
-    dragGraceTimer: Math.max(0, state.dragGraceTimer - dt),
-    flightTimer: state.flightTimer + dt,
-    vx,
-    vy,
-    x: state.x + vx * dt,
-    y: state.y + vy * dt,
-  };
+  state.dragGraceTimer = Math.max(0, state.dragGraceTimer - dt);
+  state.flightTimer += dt;
+  state.vx = vx;
+  state.vy = vy;
+  state.x += vx * dt;
+  state.y += vy * dt;
 };
 
 const getFlightTuning = (profile: ShuttleFlightProfile): FlightTuning => {

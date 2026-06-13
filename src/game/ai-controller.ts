@@ -1,5 +1,5 @@
 import { aiConfig, racketConfig, worldConfig } from './config';
-import { stepFlightState, type FlightState } from './flight';
+import { stepFlightStateMutable, type FlightState } from './flight';
 import { clamp, sideDirection } from './math';
 import type { Player, Shuttlecock } from './entities';
 import type { AiDifficulty, PlayerIntent, Side } from './types';
@@ -150,7 +150,7 @@ const predictTarget = (
     };
   }
 
-  let state: FlightState = {
+  const state: FlightState = {
     dragGraceTimer: shuttle.dragGraceTimer,
     flightProfile: shuttle.flightProfile,
     flightTimer: shuttle.flightTimer,
@@ -163,7 +163,7 @@ const predictTarget = (
   let bestY = worldConfig.groundY;
   let sawOwnSide = false;
   for (let i = 0; i < maxFrames; i += 1) {
-    state = stepFlightState(state, step);
+    stepFlightStateMutable(state, step);
 
     if (isOnSide(state.x, side)) {
       sawOwnSide = true;

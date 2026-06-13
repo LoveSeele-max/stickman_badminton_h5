@@ -9,6 +9,7 @@ import {
 import {
   getFlightDragGrace,
   stepFlightState,
+  stepFlightStateMutable,
   type FlightState,
 } from './flight';
 import { Player, Shuttlecock } from './entities';
@@ -762,7 +763,7 @@ export class BadmintonGame {
   ): ServePrediction {
     const step = 1 / 120;
     const netTop = worldConfig.groundY - worldConfig.netHeight;
-    let state: FlightState = {
+    const state: FlightState = {
       dragGraceTimer,
       flightProfile: 'serve',
       flightTimer: 0,
@@ -776,7 +777,7 @@ export class BadmintonGame {
 
     for (let i = 0; i < 260; i += 1) {
       const previous = { x: state.x, y: state.y };
-      state = stepFlightState(state, step);
+      stepFlightStateMutable(state, step);
 
       if (
         !crossedNet &&
@@ -1584,7 +1585,7 @@ export class BadmintonGame {
     dragGraceTimer: number,
     duration: number,
   ): FlightState {
-    let state: FlightState = {
+    const state: FlightState = {
       dragGraceTimer,
       flightProfile,
       flightTimer: 0,
@@ -1598,7 +1599,7 @@ export class BadmintonGame {
 
     while (remaining > 0) {
       const dt = Math.min(step, remaining);
-      state = stepFlightState(state, dt);
+      stepFlightStateMutable(state, dt);
       remaining -= dt;
 
       if (state.y + shuttleConfig.radius >= worldConfig.groundY) {
@@ -1618,7 +1619,7 @@ export class BadmintonGame {
     flightProfile: ShuttleFlightProfile,
     dragGraceTimer = getFlightDragGrace(flightProfile),
   ): FlightLandingPrediction {
-    let state: FlightState = {
+    const state: FlightState = {
       dragGraceTimer,
       flightProfile,
       flightTimer: 0,
@@ -1630,7 +1631,7 @@ export class BadmintonGame {
     const step = 1 / 120;
 
     for (let i = 0; i < 360; i += 1) {
-      state = stepFlightState(state, step);
+      stepFlightStateMutable(state, step);
 
       if (
         state.y + shuttleConfig.radius >= worldConfig.groundY ||
