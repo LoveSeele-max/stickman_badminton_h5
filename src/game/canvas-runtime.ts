@@ -77,7 +77,7 @@ export class CanvasRuntime {
 
     this.render();
 
-    if (input) {
+    if (input && steps > 0) {
       input.endFrame();
     }
   }

@@ -28,7 +28,7 @@ export const racketConfig = {
   active: 0.16,
   recovery: 0.16,
   hitBuffer: 0.15,
-  recoveryCancel: 0.56,
+  recoveryCancel: 0.42,
   assistForwardMin: 2,
   assistForwardMax: 176,
   assistHeightMin: 44,

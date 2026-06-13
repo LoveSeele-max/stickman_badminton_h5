@@ -320,17 +320,17 @@ export class BadmintonGame {
     }
 
     if (intent.hitPressed) {
-      this.captureHitIntent(player, intent);
-      player.hitBufferTimer = this.getHitQueueDuration(player);
+      this.queueHit(player, intent);
     }
 
     player.hitIntentTimer = Math.max(0, player.hitIntentTimer - dt);
+    player.queuedHitTimer = Math.max(0, player.queuedHitTimer - dt);
+    player.inputFeedbackTimer = Math.max(0, player.inputFeedbackTimer - dt);
     const wasSwinging = player.isSwinging;
     const swingHadHit = player.swingHasHit;
     player.updateSwing(dt);
 
     const startedQueuedSwing = this.tryStartQueuedSwing(player);
-    player.hitBufferTimer = Math.max(0, player.hitBufferTimer - dt);
 
     if (wasSwinging && !player.isSwinging && !swingHadHit && !startedQueuedSwing) {
       this.showSwingMiss(player);
@@ -338,16 +338,18 @@ export class BadmintonGame {
   }
 
   private tryStartQueuedSwing(player: Player): boolean {
-    if (player.hitBufferTimer <= 0) {
+    if (player.queuedHitTimer <= 0) {
       return false;
     }
 
     if (!player.isSwinging) {
+      this.promoteQueuedHit(player);
       player.startSwing();
       return true;
     }
 
     if (player.canCancelRecovery) {
+      this.promoteQueuedHit(player);
       player.startSwing(true);
       return true;
     }
@@ -369,6 +371,20 @@ export class BadmintonGame {
       racketConfig.hitBuffer,
       cancelAt - player.swingTimer + racketConfig.hitBuffer,
     );
+  }
+
+  private queueHit(player: Player, intent: PlayerIntent): void {
+    player.queuedHitMove = intent.move;
+    player.queuedHitJump = intent.jump || !player.grounded;
+    player.queuedHitTimer = this.getHitQueueDuration(player);
+    player.inputFeedbackTimer = 0.14;
+  }
+
+  private promoteQueuedHit(player: Player): void {
+    player.hitIntentMove = player.queuedHitMove;
+    player.hitIntentJump = player.queuedHitJump;
+    player.hitIntentTimer = player.swingDuration + 0.04;
+    player.queuedHitTimer = 0;
   }
 
   private launchServe(player: Player): void {
@@ -500,7 +516,6 @@ export class BadmintonGame {
     const velocity = this.getShotVelocity(player, shot, quality, contact, lockedIntent);
 
     player.swingHasHit = true;
-    player.hitBufferTimer = 0;
     player.hitIntentTimer = 0;
     this.shuttle.lastTouchedBy = player.side;
     this.shuttle.vx = velocity.x;
@@ -561,12 +576,6 @@ export class BadmintonGame {
       t: projection.t,
       zone,
     };
-  }
-
-  private captureHitIntent(player: Player, intent: PlayerIntent): void {
-    player.hitIntentMove = intent.move;
-    player.hitIntentJump = intent.jump || !player.grounded;
-    player.hitIntentTimer = racketConfig.hitBuffer + player.swingDuration + 0.04;
   }
 
   private showSwingMiss(player: Player): void {
@@ -911,10 +920,13 @@ export class BadmintonGame {
       player.swingType = null;
       player.swingTimer = 0;
       player.swingHasHit = false;
-      player.hitBufferTimer = 0;
       player.hitIntentJump = false;
       player.hitIntentMove = 0;
       player.hitIntentTimer = 0;
+      player.queuedHitTimer = 0;
+      player.queuedHitJump = false;
+      player.queuedHitMove = 0;
+      player.inputFeedbackTimer = 0;
       player.ai.serveTimer = 0;
       player.ai.decisionTimer = 0;
       player.ai.targetX = player.homeX;
@@ -1034,6 +1046,9 @@ export class BadmintonGame {
 
     const racket = player.getRacketLine();
     const offHandX = player.x - player.facing * 40;
+    const hasInputFeedback = player.inputFeedbackTimer > 0;
+    const hasQueuedHit = player.queuedHitTimer > 0;
+    const isSwingActive = player.swingPhase === 'active';
     ctx.beginPath();
     ctx.moveTo(chest.x, chest.y + 20);
     ctx.lineTo(offHandX, chest.y + 48);
@@ -1042,14 +1057,18 @@ export class BadmintonGame {
     ctx.stroke();
 
     ctx.strokeStyle =
-      player.swingPhase === 'active' ? '#38f7ff' : 'rgba(17,24,39,0.82)';
+      isSwingActive
+        ? '#38f7ff'
+        : hasInputFeedback || hasQueuedHit
+          ? '#fef08a'
+          : 'rgba(17,24,39,0.82)';
     ctx.lineWidth = 9;
     ctx.beginPath();
     ctx.moveTo(racket.start.x, racket.start.y);
     ctx.lineTo(racket.end.x, racket.end.y);
     ctx.stroke();
     ctx.strokeStyle =
-      player.swingPhase === 'active' ? '#ffffff' : 'rgba(15,23,42,0.9)';
+      isSwingActive || hasInputFeedback ? '#ffffff' : 'rgba(15,23,42,0.9)';
     ctx.lineWidth = 5;
     ctx.beginPath();
     ctx.ellipse(
@@ -1062,6 +1081,25 @@ export class BadmintonGame {
       Math.PI * 2,
     );
     ctx.stroke();
+
+    if (hasInputFeedback || hasQueuedHit) {
+      const pulse = hasInputFeedback
+        ? player.inputFeedbackTimer / 0.14
+        : clamp(player.queuedHitTimer / racketConfig.hitBuffer, 0, 1);
+      ctx.strokeStyle = hasQueuedHit
+        ? `rgba(254,240,138,${0.78 * pulse})`
+        : `rgba(56,247,255,${0.68 * pulse})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(
+        racket.start.x + player.facing * 44,
+        racket.start.y - 8,
+        16 + (1 - pulse) * 13,
+        0,
+        Math.PI * 2,
+      );
+      ctx.stroke();
+    }
   }
 
   private drawShuttle(ctx: CanvasRenderingContext2D): void {
