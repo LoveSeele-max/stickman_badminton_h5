@@ -35,6 +35,7 @@ import type {
 type FaceZone = 'handle' | 'center' | 'sweet' | 'tip' | 'edge';
 type ServeFallbackReason = 'none' | 'invalid' | 'net' | 'receiver' | 'out';
 type ServeMode = 'impulse' | 'fallback';
+type ShotClampMode = 'standard' | 'drive' | 'smash';
 
 interface HitContact {
   arcScale: number;
@@ -96,6 +97,7 @@ export class BadmintonGame {
   private aiDifficulty: AiDifficulty = 'normal';
   private score = { left: 0, right: 0 };
   private server: Side = 'left';
+  private serveFallbackCount = 0;
   private winner: Side | null = null;
   private pointTimer = 0;
   private rallyHits = 0;
@@ -127,14 +129,15 @@ export class BadmintonGame {
   private serveDebug:
     | {
         fallbackReason: ServeFallbackReason;
-        fallbackUsed: boolean;
-        flightTime: number;
-        landingX: number;
-        landingError: number;
-        mode: ServeMode;
-        netClearance: number;
-        targetX: number;
-        valid: boolean;
+      fallbackUsed: boolean;
+      flightTime: number;
+      landingX: number;
+      landingError: number;
+      mode: ServeMode;
+      netClearance: number;
+      totalFallbacks: number;
+      targetX: number;
+      valid: boolean;
       }
     | null = null;
 
@@ -542,6 +545,9 @@ export class BadmintonGame {
     this.shuttle.dragGraceTimer = dragGraceTimer;
     this.shuttle.flightTimer = 0;
     this.shuttle.flightProfile = 'serve';
+    if (serve.fallbackUsed) {
+      this.serveFallbackCount += 1;
+    }
     this.serveDebug = {
       fallbackReason: serve.fallbackReason,
       fallbackUsed: serve.fallbackUsed,
@@ -550,6 +556,7 @@ export class BadmintonGame {
       landingError: serve.prediction.landingX - targetX,
       mode: serve.mode,
       netClearance: serve.prediction.netClearance,
+      totalFallbacks: this.serveFallbackCount,
       targetX,
       valid: serve.prediction.valid,
     };
@@ -1303,7 +1310,7 @@ export class BadmintonGame {
       },
       drive: {
         aim: 0.085,
-        angle: -0.06,
+        angle: -0.02,
         baseSpeed: 1510,
         maxSpeed: 1880,
         minForward: 1060,
@@ -1319,7 +1326,7 @@ export class BadmintonGame {
       },
       smash: {
         aim: 0.07,
-        angle: 0.46,
+        angle: 0.5,
         baseSpeed: 1780,
         maxSpeed: 2100,
         minForward: 700,
@@ -1457,6 +1464,16 @@ export class BadmintonGame {
     const maxSpeed =
       (strictContact ? profile.maxSpeed * 0.98 : profile.maxSpeed * lerp(0.96, 1.06, cleanHit)) *
       fastPeakScale;
+    const clampMode: ShotClampMode =
+      !strictContact && shot === 'drive'
+        ? 'drive'
+        : !strictContact && shot === 'smash'
+          ? 'smash'
+          : 'standard';
+    const minDownward =
+      shot === 'smash' && velocity.y > 0
+        ? velocity.y * (contact.zone === 'sweet' ? 0.88 : 0.8)
+        : 0;
 
     return this.finalizeShotVelocity(
       velocity,
@@ -1464,7 +1481,8 @@ export class BadmintonGame {
       minForward,
       profile.minSpeed * lerp(0.92, 1.04, cleanHit),
       maxSpeed,
-      isFastShot && !strictContact,
+      clampMode,
+      minDownward,
     );
   }
 
@@ -1638,7 +1656,8 @@ export class BadmintonGame {
     minForward: number,
     minSpeed: number,
     maxSpeed: number,
-    preserveForward = false,
+    clampMode: ShotClampMode = 'standard',
+    minDownward = 0,
   ): Vec2 {
     const forwardSpeed = direction * velocity.x;
     const forwardCorrected =
@@ -1649,13 +1668,24 @@ export class BadmintonGame {
           }
         : velocity;
 
-    if (preserveForward) {
-      return this.clampForwardPreservingShotVelocity(
+    if (clampMode === 'drive') {
+      return this.clampDriveShotVelocity(
         forwardCorrected,
         minSpeed,
         maxSpeed,
         direction,
         minForward,
+      );
+    }
+
+    if (clampMode === 'smash') {
+      return this.clampSmashShotVelocity(
+        forwardCorrected,
+        minSpeed,
+        maxSpeed,
+        direction,
+        minForward,
+        minDownward,
       );
     }
 
@@ -1699,7 +1729,7 @@ export class BadmintonGame {
     return velocity;
   }
 
-  private clampForwardPreservingShotVelocity(
+  private clampDriveShotVelocity(
     velocity: Vec2,
     minSpeed: number,
     maxSpeed: number,
@@ -1720,6 +1750,35 @@ export class BadmintonGame {
     };
 
     return this.clampShotVelocity(forwardPreserved, minSpeed, maxSpeed);
+  }
+
+  private clampSmashShotVelocity(
+    velocity: Vec2,
+    minSpeed: number,
+    maxSpeed: number,
+    direction: number,
+    minForward: number,
+    minDownward: number,
+  ): Vec2 {
+    const clamped = this.clampShotVelocity(velocity, minSpeed, maxSpeed);
+
+    if (
+      direction * clamped.x >= minForward &&
+      (minDownward <= 0 || clamped.y >= minDownward)
+    ) {
+      return clamped;
+    }
+
+    const downward = minDownward > 0 ? Math.min(minDownward, maxSpeed * 0.96) : Math.max(0, clamped.y);
+    const maxForward = Math.sqrt(Math.max(0, maxSpeed * maxSpeed - downward * downward));
+    const desiredForward = Math.max(minForward, direction * velocity.x);
+    const forward = Math.min(desiredForward, maxForward);
+    const smashPreserved = {
+      x: direction * forward,
+      y: downward,
+    };
+
+    return this.clampShotVelocity(smashPreserved, minSpeed, maxSpeed);
   }
 
   private resolveNetCollision(): void {
@@ -1832,6 +1891,7 @@ export class BadmintonGame {
     this.phase = 'playing';
     this.score = { left: 0, right: 0 };
     this.server = 'left';
+    this.serveFallbackCount = 0;
     this.winner = null;
     this.message =
       mode === 'single'
@@ -2295,7 +2355,7 @@ export class BadmintonGame {
     }
 
     ctx.fillStyle = 'rgba(15,23,42,0.72)';
-    ctx.fillRect(24, 24, 500, this.serveDebug ? 579 : 378);
+    ctx.fillRect(24, 24, 500, this.serveDebug ? 608 : 378);
     ctx.fillStyle = '#ffffff';
     ctx.font = '500 20px Inter, sans-serif';
     ctx.textAlign = 'left';
@@ -2370,6 +2430,11 @@ export class BadmintonGame {
         `Fallback reason: ${this.serveDebug.fallbackReason}`,
         44,
         548,
+      );
+      ctx.fillText(
+        `Fallback count: ${this.serveDebug.totalFallbacks}`,
+        44,
+        577,
       );
     }
     ctx.restore();
