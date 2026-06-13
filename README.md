@@ -34,8 +34,8 @@ shot:
 - `A + S`: higher defensive lift.
 - `W + S`: jump hit, with stronger downward shots when the shuttle is high.
 
-Combo direction is sampled when `S` is pressed, so you can release movement keys
-naturally during the swing without changing the intended shot.
+Combo direction is sampled when `S` is pressed, and late inputs are buffered
+briefly so recovery can flow into the next swing without eating the command.
 
 ## Development
 

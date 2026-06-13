@@ -86,8 +86,28 @@ export class Player {
     return clamp((this.swingTimer - windup) / active, 0, 1);
   }
 
-  startSwing(): void {
-    if (this.isSwinging) {
+  get recoveryProgress(): number {
+    if (this.swingPhase !== 'recovery') {
+      return 0;
+    }
+
+    return clamp(
+      (this.swingTimer - racketConfig.windup - racketConfig.active) /
+        racketConfig.recovery,
+      0,
+      1,
+    );
+  }
+
+  get canCancelRecovery(): boolean {
+    return (
+      this.swingPhase === 'recovery' &&
+      this.recoveryProgress >= racketConfig.recoveryCancel
+    );
+  }
+
+  startSwing(force = false): void {
+    if (this.isSwinging && !force) {
       return;
     }
 
@@ -113,8 +133,19 @@ export class Player {
 
   getRacketLine(): { start: Vec2; end: Vec2 } {
     const hand = this.getHandPosition();
-    const angle = this.getRacketAngle();
+    const angle = this.getRacketAngle(this.swingTimer);
 
+    return this.getRacketLineFrom(hand, angle);
+  }
+
+  getRacketLineAtSwingTimer(swingTimer: number): { start: Vec2; end: Vec2 } {
+    const hand = this.getHandPosition();
+    const angle = this.getRacketAngle(swingTimer);
+
+    return this.getRacketLineFrom(hand, angle);
+  }
+
+  private getRacketLineFrom(hand: Vec2, angle: number): { start: Vec2; end: Vec2 } {
     return {
       start: hand,
       end: {
@@ -131,17 +162,26 @@ export class Player {
     };
   }
 
-  private getRacketAngle(): number {
+  private getRacketAngle(swingTimer: number): number {
     const direction = this.facing;
 
     if (!this.swingType) {
       return direction === 1 ? -0.92 : Math.PI + 0.92;
     }
 
+    const windup = racketConfig.windup;
+    const active = racketConfig.active;
+    const activeProgress = clamp((swingTimer - windup) / active, 0, 1);
+    const swingPhase =
+      swingTimer < windup
+        ? 'windup'
+        : swingTimer < windup + active
+          ? 'active'
+          : 'recovery';
     const progress =
-      this.swingPhase === 'active'
-        ? this.activeProgress
-        : clamp(this.swingTimer / this.swingDuration, 0, 1);
+      swingPhase === 'active'
+        ? activeProgress
+        : clamp(swingTimer / this.swingDuration, 0, 1);
 
     const start = direction === 1 ? -1.95 : -1.19;
     const end = direction === 1 ? 0.42 : Math.PI - 0.42;
@@ -158,6 +198,7 @@ export class Shuttlecock {
   lastTouchedBy: Side = 'left';
   attachedTo: Side = 'left';
   netCooldown = 0;
+  dragGraceTimer = 0;
 
   get position(): Vec2 {
     return { x: this.x, y: this.y };
@@ -171,6 +212,7 @@ export class Shuttlecock {
     this.y = player.y - 124;
     this.vx = 0;
     this.vy = 0;
+    this.dragGraceTimer = 0;
   }
 
   updateAttached(player: Player): void {
