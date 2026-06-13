@@ -21,7 +21,10 @@ export const createAiIntent = (
       jump: false,
       jumpPressed: false,
       hitHeld: false,
-      hitPressed: player.ai.serveTimer > aiConfig.serveDelay,
+      hitPressed:
+        player.ai.serveTimer > aiConfig.serveDelay &&
+        !player.isSwinging &&
+        player.queuedHitTimer <= 0,
       pausePressed: emptyPause,
     };
   }

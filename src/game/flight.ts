@@ -110,9 +110,9 @@ const getFlightTuning = (profile: ShuttleFlightProfile): FlightTuning => {
       descentDragScale: shuttleConfig.rallyFastDescentDragScale,
       graceDuration: shuttleConfig.rallyFastDragGrace,
       initialDragScale: shuttleConfig.rallyFastInitialDragScale,
-      lateDuration: 0.42,
+      lateDuration: 0.34,
       lateHorizontalScale: shuttleConfig.rallyFastLateHorizontalDragScale,
-      lateStart: 0.36,
+      lateStart: 0.48,
       maxFallSpeed: shuttleConfig.rallyFastMaxFallSpeed,
     };
   }

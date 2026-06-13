@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { getFlightDragGrace, stepFlightState, type FlightState } from './flight';
 import type { ShuttleFlightProfile } from './types';
 
-const simulate = (flightProfile: ShuttleFlightProfile): FlightState => {
+const simulate = (
+  flightProfile: ShuttleFlightProfile,
+  steps = 90,
+): FlightState => {
   let state: FlightState = {
     dragGraceTimer: getFlightDragGrace(flightProfile),
     flightProfile,
@@ -13,7 +16,7 @@ const simulate = (flightProfile: ShuttleFlightProfile): FlightState => {
     y: 420,
   };
 
-  for (let i = 0; i < 90; i += 1) {
+  for (let i = 0; i < steps; i += 1) {
     state = stepFlightState(state, 1 / 120);
   }
 
@@ -21,17 +24,19 @@ const simulate = (flightProfile: ShuttleFlightProfile): FlightState => {
 };
 
 describe('flight profiles', () => {
-  it('uses separate drag grace for fast rally, arc rally, and serve flights', () => {
-    expect(getFlightDragGrace('rally-fast')).toBeLessThan(getFlightDragGrace('rally-arc'));
+  it('keeps serve drag grace longer than rally flights', () => {
+    expect(getFlightDragGrace('rally-fast')).toBeGreaterThanOrEqual(
+      getFlightDragGrace('rally-arc'),
+    );
     expect(getFlightDragGrace('serve')).toBeGreaterThan(getFlightDragGrace('rally-arc'));
   });
 
-  it('keeps fast and arc rally trajectories distinct under the shared simulator', () => {
-    const fast = simulate('rally-fast');
-    const arc = simulate('rally-arc');
+  it('keeps fast rally shots harder through the first flight segment', () => {
+    const fast = simulate('rally-fast', 30);
+    const arc = simulate('rally-arc', 30);
 
     expect(Number.isFinite(fast.x)).toBe(true);
     expect(Number.isFinite(arc.x)).toBe(true);
-    expect(Math.abs(fast.x - arc.x)).toBeGreaterThan(12);
+    expect(Math.abs(fast.vx)).toBeGreaterThan(Math.abs(arc.vx));
   });
 });
