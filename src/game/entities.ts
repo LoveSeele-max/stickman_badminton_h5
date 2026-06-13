@@ -29,6 +29,11 @@ export class Player {
   queuedHitJump = false;
   queuedHitMove = 0;
   inputFeedbackTimer = 0;
+  hitHoldCooldown = 0;
+  hitHoldConsumed = false;
+  hitInputAge = 0;
+  readyHitTimer = 0;
+  waitingForActiveMetric = false;
   ai: AiMemory;
 
   constructor(side: Side) {
@@ -94,6 +99,14 @@ export class Player {
     const active = racketConfig.active;
 
     return clamp((this.swingTimer - windup) / active, 0, 1);
+  }
+
+  get swingProgress(): number {
+    if (!this.swingType) {
+      return 0;
+    }
+
+    return clamp(this.swingTimer / this.swingDuration, 0, 1);
   }
 
   get recoveryProgress(): number {
@@ -178,19 +191,8 @@ export class Player {
       return direction === 1 ? -0.92 : Math.PI + 0.92;
     }
 
-    const windup = racketConfig.windup;
-    const active = racketConfig.active;
-    const activeProgress = clamp((swingTimer - windup) / active, 0, 1);
-    const swingPhase =
-      swingTimer < windup
-        ? 'windup'
-        : swingTimer < windup + active
-          ? 'active'
-          : 'recovery';
-    const progress =
-      swingPhase === 'active'
-        ? activeProgress
-        : clamp(swingTimer / this.swingDuration, 0, 1);
+    const rawProgress = clamp(swingTimer / this.swingDuration, 0, 1);
+    const progress = 1 - (1 - rawProgress) ** 2.35;
 
     const start = direction === 1 ? -1.95 : -1.19;
     const end = direction === 1 ? 0.42 : Math.PI - 0.42;

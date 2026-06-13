@@ -60,6 +60,17 @@ interface ServePrediction {
   valid: boolean;
 }
 
+interface DebugMetrics {
+  flightLandingTime: number;
+  flightLandingX: number;
+  flightNetTime: number;
+  inputToActive: number;
+  launchSpeed: number;
+  netClearance: number;
+  quality: number;
+  shot: string;
+}
+
 const emptySnapshot: InputSnapshot = {
   down: new Set<string>(),
   pressed: new Set<string>(),
@@ -88,6 +99,16 @@ export class BadmintonGame {
   private impactY = 0;
   private impactPower = 1;
   private impactTimer = 0;
+  private debugMetrics: DebugMetrics = {
+    flightLandingTime: -1,
+    flightLandingX: -1,
+    flightNetTime: -1,
+    inputToActive: 0,
+    launchSpeed: 0,
+    netClearance: 0,
+    quality: 0,
+    shot: '',
+  };
   private serveDebug:
     | {
         flightTime: number;
@@ -307,20 +328,14 @@ export class BadmintonGame {
       player.jumpBufferTimer = Math.max(0, player.jumpBufferTimer - dt);
     }
 
-    const acceleration =
-      playerConfig.acceleration * (player.grounded ? 1 : playerConfig.airControl);
-    player.vx += intent.move * acceleration * dt;
-
-    if (intent.move === 0 && player.grounded) {
-      const friction = Math.exp(-playerConfig.groundFriction * dt);
-      player.vx *= friction;
-    }
-
-    player.vx = clamp(
-      player.vx,
-      -playerConfig.maxSpeed,
-      playerConfig.maxSpeed,
-    );
+    const targetSpeed = intent.move * playerConfig.maxSpeed;
+    const speedStep =
+      (player.grounded
+        ? intent.move === 0
+          ? playerConfig.groundDeceleration
+          : playerConfig.groundAcceleration
+        : playerConfig.airAcceleration) * dt;
+    player.vx = approach(player.vx, targetSpeed, speedStep);
 
     if (player.jumpBufferTimer > 0 && player.coyoteTimer > 0) {
       player.vy = -playerConfig.jumpSpeed;
@@ -348,20 +363,66 @@ export class BadmintonGame {
 
     if (intent.hitPressed) {
       this.queueHit(player, intent);
+      player.hitHoldConsumed = true;
+    } else if (this.shouldQueueHeldHit(player, intent)) {
+      this.queueHit(player, intent);
+      player.hitHoldCooldown = 0.34;
+      player.hitHoldConsumed = true;
+    }
+
+    if (!intent.hitHeld) {
+      player.hitHoldConsumed = false;
     }
 
     player.hitIntentTimer = Math.max(0, player.hitIntentTimer - dt);
     player.queuedHitTimer = Math.max(0, player.queuedHitTimer - dt);
     player.inputFeedbackTimer = Math.max(0, player.inputFeedbackTimer - dt);
+    player.readyHitTimer = intent.hitHeld && !player.hitHoldConsumed
+      ? 0.08
+      : Math.max(0, player.readyHitTimer - dt);
+    player.hitHoldCooldown = Math.max(0, player.hitHoldCooldown - dt);
+    if (player.waitingForActiveMetric) {
+      player.hitInputAge += dt;
+    }
     const wasSwinging = player.isSwinging;
+    const wasActive = player.swingPhase === 'active';
     const swingHadHit = player.swingHasHit;
     player.updateSwing(dt);
 
     const startedQueuedSwing = this.tryStartQueuedSwing(player);
+    const isActive = player.swingPhase === 'active';
+
+    if (player.waitingForActiveMetric && !wasActive && isActive) {
+      this.debugMetrics.inputToActive = player.hitInputAge;
+      player.waitingForActiveMetric = false;
+    }
 
     if (wasSwinging && !player.isSwinging && !swingHadHit && !startedQueuedSwing) {
       this.showSwingMiss(player);
     }
+  }
+
+  private shouldQueueHeldHit(player: Player, intent: PlayerIntent): boolean {
+    if (
+      !intent.hitHeld ||
+      player.hitHoldConsumed ||
+      player.isSwinging ||
+      player.queuedHitTimer > 0 ||
+      player.hitHoldCooldown > 0 ||
+      this.shuttle.state !== 'flying'
+    ) {
+      return false;
+    }
+
+    const assist = this.getHitAssist(player);
+    const direction = sideDirection(player.side);
+    const ballOnOwnSide =
+      player.side === 'left'
+        ? this.shuttle.x < worldConfig.netX
+        : this.shuttle.x > worldConfig.netX;
+    const incoming = direction * this.shuttle.vx < 180 || ballOnOwnSide;
+
+    return assist.inZone && incoming;
   }
 
   private tryStartQueuedSwing(player: Player): boolean {
@@ -405,6 +466,8 @@ export class BadmintonGame {
     player.queuedHitJump = intent.jump || !player.grounded;
     player.queuedHitTimer = this.getHitQueueDuration(player);
     player.inputFeedbackTimer = 0.14;
+    player.hitInputAge = 0;
+    player.waitingForActiveMetric = true;
   }
 
   private promoteQueuedHit(player: Player): void {
@@ -442,6 +505,7 @@ export class BadmintonGame {
       targetX,
       valid: serve.prediction.valid,
     };
+    this.startFlightDebug('serve', 1, Math.hypot(this.shuttle.vx, this.shuttle.vy));
     this.rallyHits = 0;
     this.message = '';
   }
@@ -644,6 +708,11 @@ export class BadmintonGame {
 
     this.shuttle.previousX = this.shuttle.x;
     this.shuttle.previousY = this.shuttle.y;
+    const previous = {
+      flightTimer: this.shuttle.flightTimer,
+      x: this.shuttle.x,
+      y: this.shuttle.y,
+    };
 
     const next = this.stepFlightState(
       {
@@ -665,6 +734,36 @@ export class BadmintonGame {
     this.shuttle.flightTimer = next.flightTimer;
     this.shuttle.clampSpeed();
     this.shuttle.netCooldown = Math.max(0, this.shuttle.netCooldown - dt);
+    this.updateFlightDebug(previous);
+  }
+
+  private startFlightDebug(shot: string, quality: number, launchSpeed: number): void {
+    this.debugMetrics.flightLandingTime = -1;
+    this.debugMetrics.flightLandingX = -1;
+    this.debugMetrics.flightNetTime = -1;
+    this.debugMetrics.launchSpeed = launchSpeed;
+    this.debugMetrics.netClearance = 0;
+    this.debugMetrics.quality = quality;
+    this.debugMetrics.shot = shot;
+  }
+
+  private updateFlightDebug(previous: { flightTimer: number; x: number; y: number }): void {
+    if (
+      this.debugMetrics.flightNetTime >= 0 ||
+      (previous.x - worldConfig.netX) * (this.shuttle.x - worldConfig.netX) > 0
+    ) {
+      return;
+    }
+
+    const dx = this.shuttle.x - previous.x;
+    const t = clamp(
+      Math.abs(dx) < 0.001 ? 0 : (worldConfig.netX - previous.x) / dx,
+      0,
+      1,
+    );
+    const netY = lerp(previous.y, this.shuttle.y, t);
+    this.debugMetrics.flightNetTime = lerp(previous.flightTimer, this.shuttle.flightTimer, t);
+    this.debugMetrics.netClearance = worldConfig.groundY - worldConfig.netHeight - netY;
   }
 
   private resolveRacketHits(
@@ -800,6 +899,7 @@ export class BadmintonGame {
     this.shuttle.previousX = this.shuttle.x;
     this.shuttle.previousY = this.shuttle.y;
     this.rallyHits += 1;
+    this.startFlightDebug(shot, quality, Math.hypot(velocity.x, velocity.y));
     this.lastHitLabel = `${contact.label} ${shot}`;
     this.lastHitTimer = 0.72;
     this.impactX = this.shuttle.x;
@@ -829,11 +929,11 @@ export class BadmintonGame {
     }
 
     const tuning = {
-      handle: { arcScale: 1.1, distanceScale: 0.88, label: 'Handle', powerScale: 0.86 },
-      center: { arcScale: 1, distanceScale: 1, label: 'Center', powerScale: 1.04 },
-      sweet: { arcScale: 0.92, distanceScale: 1.12, label: 'Sweet', powerScale: 1.22 },
-      tip: { arcScale: 0.9, distanceScale: 1.08, label: 'Tip', powerScale: 1.14 },
-      edge: { arcScale: 1.14, distanceScale: 0.8, label: 'Edge', powerScale: 0.78 },
+      handle: { arcScale: 1.1, distanceScale: 0.86, label: 'Handle', powerScale: 0.82 },
+      center: { arcScale: 1, distanceScale: 1.04, label: 'Center', powerScale: 1.12 },
+      sweet: { arcScale: 0.9, distanceScale: 1.16, label: 'Sweet', powerScale: 1.34 },
+      tip: { arcScale: 0.88, distanceScale: 1.12, label: 'Tip', powerScale: 1.2 },
+      edge: { arcScale: 1.14, distanceScale: 0.78, label: 'Edge', powerScale: 0.72 },
     } satisfies Record<
       FaceZone,
       { arcScale: number; distanceScale: number; label: string; powerScale: number }
@@ -934,40 +1034,28 @@ export class BadmintonGame {
     contact: HitContact,
     intent: HitIntentLock,
   ): ShotKind {
-    const netTop = worldConfig.groundY - worldConfig.netHeight;
     const heightAboveGround = worldConfig.groundY - this.shuttle.y;
-    const nearNet = Math.abs(this.shuttle.x - worldConfig.netX) < 150;
     const direction = sideDirection(player.side);
-    const movingForward = direction * player.vx > 80 || direction * intent.move > 0;
-    const movingBack = direction * intent.move < 0;
+    const forwardInput = direction * intent.move;
 
     if (
-      (!player.grounded || intent.jump) &&
-      contact.t > 0.62 &&
-      this.shuttle.y < netTop - 10 &&
-      heightAboveGround > 230
+      (intent.jump || !player.grounded) &&
+      heightAboveGround > 220 &&
+      contact.zone !== 'handle'
     ) {
       return 'smash';
     }
 
-    if (movingForward && contact.zone !== 'handle' && heightAboveGround > 120) {
+    if (forwardInput > 0 && contact.zone !== 'handle') {
       return 'drive';
     }
 
-    if (movingBack || contact.zone === 'handle' || heightAboveGround < 150) {
+    if (forwardInput < 0 || heightAboveGround < 150 || contact.zone === 'handle') {
       return 'lift';
     }
 
-    if (nearNet && this.shuttle.y > netTop - 20) {
-      return 'drive';
-    }
-
-    if (heightAboveGround > 285 && contact.zone !== 'tip') {
+    if (heightAboveGround > 320 && contact.zone !== 'tip') {
       return 'clear';
-    }
-
-    if (contact.zone === 'tip' || contact.zone === 'sweet') {
-      return 'drive';
     }
 
     return 'neutral';
@@ -1003,42 +1091,42 @@ export class BadmintonGame {
       clear: {
         aim: 0.24,
         angle: -0.58,
-        baseSpeed: 1180,
-        maxSpeed: 1500,
+        baseSpeed: 1260,
+        maxSpeed: 1600,
         minForward: 620,
-        minSpeed: 930,
+        minSpeed: 1020,
       },
       drive: {
         aim: 0.17,
         angle: -0.06,
-        baseSpeed: 1380,
-        maxSpeed: 1780,
-        minForward: 980,
-        minSpeed: 1120,
+        baseSpeed: 1510,
+        maxSpeed: 1880,
+        minForward: 1060,
+        minSpeed: 1240,
       },
       lift: {
         aim: 0.22,
         angle: -0.88,
-        baseSpeed: 1080,
-        maxSpeed: 1380,
+        baseSpeed: 1120,
+        maxSpeed: 1450,
         minForward: 460,
-        minSpeed: 840,
+        minSpeed: 900,
       },
       smash: {
         aim: 0.12,
         angle: 0.46,
-        baseSpeed: 1640,
-        maxSpeed: 2050,
+        baseSpeed: 1780,
+        maxSpeed: 2100,
         minForward: 700,
-        minSpeed: 1320,
+        minSpeed: 1460,
       },
       neutral: {
         aim: 0.2,
         angle: -0.24,
-        baseSpeed: 1050,
-        maxSpeed: 1350,
-        minForward: 520,
-        minSpeed: 820,
+        baseSpeed: 1180,
+        maxSpeed: 1500,
+        minForward: 600,
+        minSpeed: 980,
       },
     } satisfies Record<
       ShotKind,
@@ -1255,12 +1343,16 @@ export class BadmintonGame {
 
     if (this.shuttle.x < -48 || this.shuttle.x > worldConfig.width + 48) {
       this.shuttle.state = 'out';
+      this.debugMetrics.flightLandingTime = this.shuttle.flightTimer;
+      this.debugMetrics.flightLandingX = this.shuttle.x;
       this.awardPoint(oppositeSide(this.shuttle.lastTouchedBy), 'Out');
       return;
     }
 
     if (this.shuttle.y + shuttleConfig.radius >= worldConfig.groundY) {
       this.shuttle.state = 'grounded';
+      this.debugMetrics.flightLandingTime = this.shuttle.flightTimer;
+      this.debugMetrics.flightLandingX = this.shuttle.x;
       const scorer: Side = this.shuttle.x < worldConfig.netX ? 'right' : 'left';
       this.awardPoint(scorer, 'Ground');
     }
@@ -1314,6 +1406,11 @@ export class BadmintonGame {
       player.queuedHitJump = false;
       player.queuedHitMove = 0;
       player.inputFeedbackTimer = 0;
+      player.hitHoldCooldown = 0;
+      player.hitHoldConsumed = false;
+      player.hitInputAge = 0;
+      player.readyHitTimer = 0;
+      player.waitingForActiveMetric = false;
       player.ai.serveTimer = 0;
       player.ai.decisionTimer = 0;
       player.ai.targetX = player.homeX;
@@ -1324,6 +1421,16 @@ export class BadmintonGame {
     this.resetPlayers();
     this.rallyHits = 0;
     this.serveDebug = null;
+    this.debugMetrics = {
+      flightLandingTime: -1,
+      flightLandingX: -1,
+      flightNetTime: -1,
+      inputToActive: 0,
+      launchSpeed: 0,
+      netClearance: 0,
+      quality: 0,
+      shot: '',
+    };
     this.shuttle.attachTo(this.players[server]);
   }
 
@@ -1436,6 +1543,7 @@ export class BadmintonGame {
     const offHandX = player.x - player.facing * 40;
     const hasInputFeedback = player.inputFeedbackTimer > 0;
     const hasQueuedHit = player.queuedHitTimer > 0;
+    const hasReadyHit = player.readyHitTimer > 0;
     const isSwingActive = player.swingPhase === 'active';
     ctx.beginPath();
     ctx.moveTo(chest.x, chest.y + 20);
@@ -1449,6 +1557,8 @@ export class BadmintonGame {
         ? '#38f7ff'
         : hasInputFeedback || hasQueuedHit
           ? '#fef08a'
+          : hasReadyHit
+            ? '#67e8f9'
           : 'rgba(17,24,39,0.82)';
     ctx.lineWidth = 9;
     ctx.beginPath();
@@ -1456,7 +1566,7 @@ export class BadmintonGame {
     ctx.lineTo(racket.end.x, racket.end.y);
     ctx.stroke();
     ctx.strokeStyle =
-      isSwingActive || hasInputFeedback ? '#ffffff' : 'rgba(15,23,42,0.9)';
+      isSwingActive || hasInputFeedback || hasReadyHit ? '#ffffff' : 'rgba(15,23,42,0.9)';
     ctx.lineWidth = 5;
     ctx.beginPath();
     ctx.ellipse(
@@ -1470,10 +1580,12 @@ export class BadmintonGame {
     );
     ctx.stroke();
 
-    if (hasInputFeedback || hasQueuedHit) {
+    if (hasInputFeedback || hasQueuedHit || hasReadyHit) {
       const pulse = hasInputFeedback
         ? player.inputFeedbackTimer / 0.14
-        : clamp(player.queuedHitTimer / racketConfig.hitBuffer, 0, 1);
+        : hasQueuedHit
+          ? clamp(player.queuedHitTimer / racketConfig.hitBuffer, 0, 1)
+          : 0.5;
       ctx.strokeStyle = hasQueuedHit
         ? `rgba(254,240,138,${0.78 * pulse})`
         : `rgba(56,247,255,${0.68 * pulse})`;
@@ -1706,29 +1818,52 @@ export class BadmintonGame {
     }
 
     ctx.fillStyle = 'rgba(15,23,42,0.72)';
-    ctx.fillRect(24, 24, 420, this.serveDebug ? 192 : 120);
+    ctx.fillRect(24, 24, 470, this.serveDebug ? 406 : 320);
     ctx.fillStyle = '#ffffff';
     ctx.font = '500 20px Inter, sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText(`Phase: ${this.phase}`, 44, 55);
     ctx.fillText(`Ball: ${Math.round(this.shuttle.vx)}, ${Math.round(this.shuttle.vy)}`, 44, 84);
     ctx.fillText(`State: ${this.shuttle.state}`, 44, 113);
+    ctx.fillText(`Input->active: ${this.debugMetrics.inputToActive.toFixed(3)}s`, 44, 142);
+    ctx.fillText(`Swing total: ${this.players.left.swingDuration.toFixed(3)}s`, 44, 171);
+    ctx.fillText(
+      `Cancel at: ${(racketConfig.windup + racketConfig.active + racketConfig.recovery * racketConfig.recoveryCancel).toFixed(3)}s`,
+      44,
+      200,
+    );
+    ctx.fillText(
+      `Net/land time: ${formatDebugTime(this.debugMetrics.flightNetTime)} / ${formatDebugTime(this.debugMetrics.flightLandingTime)}`,
+      44,
+      229,
+    );
+    ctx.fillText(
+      `Landing x: ${this.debugMetrics.flightLandingX >= 0 ? Math.round(this.debugMetrics.flightLandingX) : '--'}`,
+      44,
+      258,
+    );
+    ctx.fillText(
+      `Shot: ${this.debugMetrics.shot || '--'} | q ${this.debugMetrics.quality.toFixed(2)} | v ${Math.round(this.debugMetrics.launchSpeed)}`,
+      44,
+      287,
+    );
+    ctx.fillText(`Net clearance: ${Math.round(this.debugMetrics.netClearance)} px`, 44, 316);
 
     if (this.serveDebug) {
       ctx.fillText(
         `Serve land/target: ${Math.round(this.serveDebug.landingX)} / ${Math.round(this.serveDebug.targetX)}`,
         44,
-        142,
+        345,
       );
       ctx.fillText(
         `Net clearance: ${Math.round(this.serveDebug.netClearance)} px`,
         44,
-        171,
+        374,
       );
       ctx.fillText(
         `Serve time: ${this.serveDebug.flightTime.toFixed(2)}s ${this.serveDebug.valid ? 'OK' : 'CHECK'}`,
         44,
-        200,
+        403,
       );
     }
     ctx.restore();
@@ -1768,3 +1903,14 @@ const smoothstep = (value: number): number => {
 
   return t * t * (3 - 2 * t);
 };
+
+const approach = (value: number, target: number, maxDelta: number): number => {
+  if (value < target) {
+    return Math.min(target, value + maxDelta);
+  }
+
+  return Math.max(target, value - maxDelta);
+};
+
+const formatDebugTime = (time: number): string =>
+  time >= 0 ? `${time.toFixed(2)}s` : '--';
