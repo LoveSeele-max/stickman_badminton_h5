@@ -20,6 +20,7 @@ import {
   sideDirection,
 } from './math';
 import type {
+  AiDifficulty,
   GamePhase,
   InputSnapshot,
   MatchMode,
@@ -90,13 +91,14 @@ export class BadmintonGame {
     right: new Player('right'),
   };
   private readonly shuttle = new Shuttlecock();
+  private aiDifficulty: AiDifficulty = 'normal';
   private score = { left: 0, right: 0 };
   private server: Side = 'left';
   private winner: Side | null = null;
   private pointTimer = 0;
   private rallyHits = 0;
   private debug = false;
-  private message = 'Press 1 for Single Player or 2 for Local Versus';
+  private message = 'Press 1 Normal AI, 2 Boss AI, or 3 Local Versus';
   private lastHitLabel = '';
   private lastHitTimer = 0;
   private impactX = 0;
@@ -131,11 +133,11 @@ export class BadmintonGame {
       }
     | null = null;
 
-  constructor(initialMode?: MatchMode) {
-    this.resetMatch('single');
+  constructor(initialMode?: MatchMode, initialAiDifficulty: AiDifficulty = 'normal') {
+    this.resetMatch('single', initialAiDifficulty);
     if (!initialMode) {
       this.phase = 'menu';
-      this.message = 'Press 1 for Single Player or 2 for Local Versus';
+      this.message = 'Press 1 Normal AI, 2 Boss AI, or 3 Local Versus';
     } else if (initialMode !== 'single') {
       this.resetMatch(initialMode);
     }
@@ -204,11 +206,16 @@ export class BadmintonGame {
 
   private updateMenu(): void {
     if (this.wasPressed('Digit1') || this.wasPressed('Enter')) {
-      this.resetMatch('single');
+      this.resetMatch('single', 'normal');
       return;
     }
 
     if (this.wasPressed('Digit2')) {
+      this.resetMatch('single', 'boss');
+      return;
+    }
+
+    if (this.wasPressed('Digit3')) {
       this.resetMatch('versus');
     }
   }
@@ -264,7 +271,7 @@ export class BadmintonGame {
 
     if (this.wasPressed('KeyM')) {
       this.phase = 'menu';
-      this.message = 'Press 1 for Single Player or 2 for Local Versus';
+      this.message = 'Press 1 Normal AI, 2 Boss AI, or 3 Local Versus';
     }
   }
 
@@ -285,13 +292,19 @@ export class BadmintonGame {
 
     if (this.wasPressed('KeyM') || this.wasPressed('Escape')) {
       this.phase = 'menu';
-      this.message = 'Press 1 for Single Player or 2 for Local Versus';
+      this.message = 'Press 1 Normal AI, 2 Boss AI, or 3 Local Versus';
     }
   }
 
   private getControllerIntent(player: Player, dt: number): PlayerIntent {
     if (this.mode === 'single' && player.side === 'right') {
-      return createAiIntent(player, this.players.left, this.shuttle, dt);
+      return createAiIntent(
+        player,
+        this.players.left,
+        this.shuttle,
+        dt,
+        this.aiDifficulty,
+      );
     }
 
     return this.getHumanIntent(player.side);
@@ -1740,15 +1753,18 @@ export class BadmintonGame {
     }
   }
 
-  private resetMatch(mode: MatchMode): void {
+  private resetMatch(mode: MatchMode, aiDifficulty = this.aiDifficulty): void {
     this.mode = mode;
+    if (mode === 'single') {
+      this.aiDifficulty = aiDifficulty;
+    }
     this.phase = 'playing';
     this.score = { left: 0, right: 0 };
     this.server = 'left';
     this.winner = null;
     this.message =
       mode === 'single'
-        ? 'Single Player: A/D move, W jump, S hit'
+        ? `Single Player (${this.getAiDifficultyLabel()} AI): A/D move, W jump, S hit`
         : 'Local Versus: P1 A/D/W/S, P2 arrows/down';
     this.resetPlayers();
     this.resetRally(this.server);
@@ -2057,7 +2073,7 @@ export class BadmintonGame {
     );
     ctx.font = '600 22px Inter, sans-serif';
     ctx.fillText(
-      `${this.mode === 'single' ? 'Single' : 'Versus'} | Serve: ${this.server.toUpperCase()} | Rally: ${this.rallyHits}`,
+      `${this.getModeLabel()} | Serve: ${this.server.toUpperCase()} | Rally: ${this.rallyHits}`,
       worldConfig.width / 2,
       100,
     );
@@ -2109,10 +2125,20 @@ export class BadmintonGame {
 
   private getServeHint(): string {
     if (this.mode === 'single' && this.server === 'right') {
-      return 'AI serving';
+      return `${this.getAiDifficultyLabel()} AI serving`;
     }
 
     return this.server === 'left' ? 'Press S to serve' : 'Press Down to serve';
+  }
+
+  private getModeLabel(): string {
+    return this.mode === 'single'
+      ? `Single ${this.getAiDifficultyLabel()}`
+      : 'Versus';
+  }
+
+  private getAiDifficultyLabel(): string {
+    return this.aiDifficulty === 'boss' ? 'Boss' : 'Normal';
   }
 
   private drawMenu(ctx: CanvasRenderingContext2D): void {
@@ -2126,14 +2152,15 @@ export class BadmintonGame {
     ctx.font = '500 28px Inter, sans-serif';
     ctx.fillText('Arcade badminton prototype', worldConfig.width / 2, 306);
 
-    this.drawMenuButton(ctx, 1, 'Single Player', 412);
-    this.drawMenuButton(ctx, 2, 'Local Versus', 504);
+    this.drawMenuButton(ctx, 1, 'AI Normal', 392);
+    this.drawMenuButton(ctx, 2, 'AI Demon King', 484);
+    this.drawMenuButton(ctx, 3, 'Local Versus', 576);
 
     ctx.font = '500 23px Inter, sans-serif';
     ctx.fillStyle = 'rgba(255,255,255,0.82)';
-    ctx.fillText('P1: A/D move, W jump, S hit', worldConfig.width / 2, 632);
-    ctx.fillText('P2: arrows move/jump, Down hit', worldConfig.width / 2, 672);
-    ctx.fillText('P pause, R restart, H debug', worldConfig.width / 2, 712);
+    ctx.fillText('P1: A/D move, W jump, S hit', worldConfig.width / 2, 684);
+    ctx.fillText('P2: arrows move/jump, Down hit', worldConfig.width / 2, 724);
+    ctx.fillText('P pause, R restart, H debug', worldConfig.width / 2, 764);
   }
 
   private drawMenuButton(

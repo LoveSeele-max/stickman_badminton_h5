@@ -2,6 +2,8 @@ export type Side = 'left' | 'right';
 
 export type MatchMode = 'single' | 'versus';
 
+export type AiDifficulty = 'normal' | 'boss';
+
 export type GamePhase = 'menu' | 'playing' | 'paused' | 'point' | 'matchEnd';
 
 export type ShuttleState = 'attached' | 'flying' | 'grounded' | 'out';

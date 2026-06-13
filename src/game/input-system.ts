@@ -11,6 +11,7 @@ const gameKeys = new Set([
   'ArrowUp',
   'Digit1',
   'Digit2',
+  'Digit3',
   'Enter',
   'Escape',
   'KeyP',

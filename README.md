@@ -7,7 +7,7 @@ repository.
 
 - Vite + TypeScript + Canvas 2D runtime.
 - Fixed timestep update loop with responsive 16:9 world scaling.
-- Single player mode: P1 on the left against a lightweight AI on the right.
+- Single player mode: P1 on the left against selectable normal or boss AI.
 - Local versus mode: two players on one keyboard.
 - Core movement, jumping, serving, swinging, shuttle flight, net contact, scoring,
   pause, restart, and debug hitbox overlay.
@@ -24,7 +24,8 @@ repository.
 | Menu | M | M |
 | Debug overlay | H | H |
 
-At the main menu, press `1` for single player or `2` for local versus.
+At the main menu, press `1` for normal AI, `2` for boss AI, or `3` for local
+versus.
 
 Hit feel uses one clear swing per hit press. Simple key combinations shape the
 shot:
