@@ -122,6 +122,7 @@ export class BadmintonGame {
   };
   private serveDebug:
     | {
+        fallbackUsed: boolean;
         flightTime: number;
         landingX: number;
         netClearance: number;
@@ -165,7 +166,7 @@ export class BadmintonGame {
         this.updateMenu();
         break;
       case 'playing':
-        this.updatePlaying(simulationDt);
+        this.updatePlaying(dt, simulationDt);
         break;
       case 'paused':
         this.updatePaused();
@@ -212,7 +213,7 @@ export class BadmintonGame {
     }
   }
 
-  private updatePlaying(dt: number): void {
+  private updatePlaying(dt: number, simulationDt = dt): void {
     if (this.wasPressed('Escape') || this.wasPressed('KeyP')) {
       this.phase = 'paused';
       this.message = 'Paused';
@@ -239,7 +240,7 @@ export class BadmintonGame {
       return;
     }
 
-    this.updateShuttle(dt);
+    this.updateShuttle(simulationDt);
     this.resolveRacketHits(leftIntent, rightIntent, dt);
     this.resolveNetCollision();
     this.resolvePointEnd();
@@ -523,6 +524,7 @@ export class BadmintonGame {
     this.shuttle.flightTimer = 0;
     this.shuttle.flightProfile = 'serve';
     this.serveDebug = {
+      fallbackUsed: serve.fallbackUsed,
       flightTime: serve.prediction.flightTime,
       landingX: serve.prediction.landingX,
       netClearance: serve.prediction.netClearance,
@@ -566,9 +568,10 @@ export class BadmintonGame {
     direction: number,
     targetX: number,
     dragGraceTimer: number,
-  ): { velocity: Vec2; prediction: ServePrediction } {
+  ): { fallbackUsed: boolean; velocity: Vec2; prediction: ServePrediction } {
     const baseSpeed = 1280;
     const baseAngle = -0.74;
+    let fallbackUsed = false;
     let velocity = {
       x: direction * Math.cos(baseAngle) * baseSpeed,
       y: Math.sin(baseAngle) * baseSpeed,
@@ -603,13 +606,34 @@ export class BadmintonGame {
 
     let prediction = this.predictServe(start, velocity, dragGraceTimer);
 
-    if (!prediction.valid || Math.abs(prediction.landingX - targetX) > 170) {
+    if (this.shouldFallbackServe(prediction, direction)) {
       const fallback = this.solveServeVelocity(start, direction, targetX, dragGraceTimer);
       velocity = fallback.velocity;
       prediction = fallback.prediction;
+      fallbackUsed = true;
     }
 
-    return { velocity, prediction };
+    return { fallbackUsed, velocity, prediction };
+  }
+
+  private shouldFallbackServe(
+    prediction: ServePrediction,
+    direction: number,
+  ): boolean {
+    const crossedToReceiver =
+      direction === 1
+        ? prediction.landingX > worldConfig.netX + 120
+        : prediction.landingX < worldConfig.netX - 120;
+    const landsInWorld =
+      prediction.landingX > worldConfig.sidePadding &&
+      prediction.landingX < worldConfig.width - worldConfig.sidePadding;
+
+    return (
+      !prediction.valid ||
+      prediction.netClearance < 62 ||
+      !crossedToReceiver ||
+      !landsInWorld
+    );
   }
 
   private solveServeVelocity(
@@ -1229,7 +1253,7 @@ export class BadmintonGame {
         minSpeed: 1020,
       },
       drive: {
-        aim: 0.14,
+        aim: 0.1,
         angle: -0.06,
         baseSpeed: 1510,
         maxSpeed: 1880,
@@ -1245,7 +1269,7 @@ export class BadmintonGame {
         minSpeed: 900,
       },
       smash: {
-        aim: 0.12,
+        aim: 0.085,
         angle: 0.46,
         baseSpeed: 1780,
         maxSpeed: 2100,
@@ -1292,6 +1316,7 @@ export class BadmintonGame {
     } satisfies Record<ShotKind, { x: number; y: number; t: number }>;
     const profile = profileByShot[shot];
     const target = targetByShot[shot];
+    const isFastShot = shot === 'drive' || shot === 'smash';
     let launchAngle =
       profile.angle -
       lowContact * 0.22 +
@@ -1329,11 +1354,13 @@ export class BadmintonGame {
       x: direction * Math.cos(launchAngle) * speed,
       y: Math.sin(launchAngle) * speed,
     };
-    const racketBlend = 0.06 + cleanHit * 0.05;
-    velocity.x += racketVelocity.x * racketBlend + player.vx * 0.18;
+    const racketBlend = isFastShot ? 0.025 + cleanHit * 0.025 : 0.045 + cleanHit * 0.035;
+    const racketVerticalBlend =
+      shot === 'lift' || shot === 'clear' ? 0.03 : isFastShot ? 0.03 : 0.055;
+    velocity.x += racketVelocity.x * racketBlend + player.vx * (isFastShot ? 0.12 : 0.18);
     velocity.y +=
-      racketVelocity.y * (shot === 'lift' || shot === 'clear' ? 0.03 : 0.065) +
-      player.vy * 0.04 -
+      racketVelocity.y * racketVerticalBlend +
+      player.vy * (isFastShot ? 0.025 : 0.04) -
       incomingVelocity.y * (0.04 + cleanHit * 0.04);
     velocity.x += -incomingVelocity.x * (0.08 + cleanHit * 0.08);
 
@@ -1346,6 +1373,9 @@ export class BadmintonGame {
       flightProfile,
       dragGraceTimer,
       aimStrength,
+      shot,
+      contact,
+      cleanHit,
     );
 
     const edgeFlutter =
@@ -1356,13 +1386,35 @@ export class BadmintonGame {
     const minForward =
       profile.minForward *
       (shot === 'drive' || shot === 'smash' ? lerp(0.9, 1.04, cleanHit) : 1);
+    const strictContact = contact.zone === 'edge' || contact.zone === 'handle';
+    const fastPeakScale =
+      shot === 'smash'
+        ? contact.zone === 'sweet'
+          ? intent.jump || !player.grounded
+            ? 1.12
+            : 1.09
+          : contact.zone === 'center' || contact.zone === 'tip'
+            ? 1.04
+            : 1
+        : shot === 'drive'
+          ? contact.zone === 'sweet'
+            ? 1.1
+            : contact.zone === 'center' || contact.zone === 'tip'
+              ? 1.04
+              : 1
+          : contact.zone === 'sweet'
+            ? 1.03
+            : 1;
+    const maxSpeed =
+      (strictContact ? profile.maxSpeed * 0.98 : profile.maxSpeed * lerp(0.96, 1.06, cleanHit)) *
+      fastPeakScale;
 
     return this.finalizeShotVelocity(
       velocity,
       direction,
       minForward,
       profile.minSpeed * lerp(0.92, 1.04, cleanHit),
-      profile.maxSpeed * lerp(0.96, 1.06, cleanHit),
+      maxSpeed,
     );
   }
 
@@ -1373,10 +1425,29 @@ export class BadmintonGame {
     flightProfile: ShuttleFlightProfile,
     dragGraceTimer: number,
     aimStrength: number,
+    shot: ShotKind,
+    contact: HitContact,
+    cleanHit: number,
   ): Vec2 {
+    const original = { ...velocity };
     let corrected = { ...velocity };
-    const horizontalScale = flightProfile === 'rally-fast' ? 0.72 : 0.9;
-    const verticalScale = flightProfile === 'rally-fast' ? 0.48 : 0.78;
+    const isFastShot = shot === 'drive' || shot === 'smash';
+    const fastContactScale =
+      contact.zone === 'sweet'
+        ? 0.78
+        : contact.zone === 'center' || contact.zone === 'tip'
+          ? 0.9
+          : 1;
+    const horizontalScale = isFastShot
+      ? (shot === 'drive' ? 0.48 : 0.42) * fastContactScale
+      : flightProfile === 'rally-fast'
+        ? 0.72
+        : 0.9;
+    const verticalScale = isFastShot
+      ? (shot === 'drive' ? 0.2 : 0.16) * fastContactScale
+      : flightProfile === 'rally-fast'
+        ? 0.48
+        : 0.78;
 
     for (let i = 0; i < 2; i += 1) {
       const prediction = this.predictFlightPosition(
@@ -1402,6 +1473,37 @@ export class BadmintonGame {
             verticalScale *
             iterationScale,
       };
+    }
+
+    if (isFastShot) {
+      const launchPreserve =
+        (contact.zone === 'sweet'
+          ? 0.62
+          : contact.zone === 'center' || contact.zone === 'tip'
+            ? 0.42
+            : 0.22) * clamp(cleanHit, 0.3, 1);
+      const retainedCorrection = 1 - launchPreserve * 0.62;
+      const maxHorizontalDelta = shot === 'drive' ? 78 : 68;
+      const maxVerticalDelta = shot === 'drive' ? 34 : 28;
+      const direction = original.x >= 0 ? 1 : -1;
+      const minimumForward = direction * original.x * (contact.zone === 'sweet' ? 0.96 : 0.92);
+
+      corrected = {
+        x:
+          original.x +
+          clamp((corrected.x - original.x) * retainedCorrection, -maxHorizontalDelta, maxHorizontalDelta),
+        y:
+          original.y +
+          clamp((corrected.y - original.y) * retainedCorrection, -maxVerticalDelta, maxVerticalDelta),
+      };
+
+      if (direction * corrected.x < minimumForward) {
+        corrected.x = direction * minimumForward;
+      }
+
+      if (shot === 'smash' && original.y > 0) {
+        corrected.y = Math.max(corrected.y, original.y * (contact.zone === 'sweet' ? 0.94 : 0.9));
+      }
     }
 
     return corrected;
@@ -2095,7 +2197,7 @@ export class BadmintonGame {
     }
 
     ctx.fillStyle = 'rgba(15,23,42,0.72)';
-    ctx.fillRect(24, 24, 500, this.serveDebug ? 492 : 378);
+    ctx.fillRect(24, 24, 500, this.serveDebug ? 521 : 378);
     ctx.fillStyle = '#ffffff';
     ctx.font = '500 20px Inter, sans-serif';
     ctx.textAlign = 'left';
@@ -2155,6 +2257,11 @@ export class BadmintonGame {
         `Serve time: ${this.serveDebug.flightTime.toFixed(2)}s ${this.serveDebug.valid ? 'OK' : 'CHECK'}`,
         44,
         461,
+      );
+      ctx.fillText(
+        `Serve fallback: ${this.serveDebug.fallbackUsed ? 'yes' : 'no'}`,
+        44,
+        490,
       );
     }
     ctx.restore();

@@ -57,7 +57,7 @@ export const shuttleConfig = {
   serveLateHorizontalDragScale: 0.72,
   serveDescentDragScale: 1.16,
   maxFallSpeed: 900,
-  maxSpeed: 2100,
+  maxSpeed: 2350,
 };
 
 export const matchConfig = {
